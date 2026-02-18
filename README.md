@@ -13,6 +13,17 @@ the forwarded agent socket path changes, breaking existing sessions.
 unix-socket-switcher solves this by exposing a socket at a well-known location
 and forwarding to the real socket found via a glob pattern.
 
+## Radicle note
+
+This project uses [Radicle][radicle] as a primary distributed code collaboration
+platform. The Github repo is only a read-only mirror.
+
+Head to [the project's Radicle site][project-radicle] for an up to date version
+and more information.
+
+[radicle]: https://radicle.xyz
+[project-radicle]: https://app.radicle.xyz/nodes/radicle.dpc.pw
+
 ## Major changes from the original
 
 Note: The list might become outdated.
