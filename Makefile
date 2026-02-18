@@ -10,7 +10,7 @@
 # * Redistributions in binary form must reproduce the above copyright
 #   notice, this list of conditions and the following disclaimer in the
 #   documentation and/or other materials provided with the distribution.
-# * Neither the name of ssh-agent-switcher nor the names of its
+# * Neither the name of unix-socket-switcher nor the names of its
 #   contributors may be used to endorse or promote products derived from
 #   this software without specific prior written permission.
 #
@@ -32,7 +32,7 @@ MODE = debug
 
 sinclude config.mk
 
-BIN = target/$(MODE)/ssh-agent-switcher
+BIN = target/$(MODE)/unix-socket-switcher
 RS_SRCS = src/find.rs src/lib.rs src/main.rs
 SRCS = Cargo.toml $(RS_SRCS)
 
@@ -54,13 +54,13 @@ inttest: inttest.sh
 .PHONY: install
 install: $(BIN)
 	install -m 755 -d "$(DESTDIR)$(PREFIX)/bin"
-	install -m 755 "$(BIN)" "$(DESTDIR)$(PREFIX)/bin/ssh-agent-switcher"
-	install -m 755 -d "$(DESTDIR)$(PREFIX)/share/doc/ssh-agent-switcher"
-	install -m 644 COPYING "$(DESTDIR)$(PREFIX)/share/doc/ssh-agent-switcher/COPYING"
-	install -m 644 NEWS.md "$(DESTDIR)$(PREFIX)/share/doc/ssh-agent-switcher/NEWS.md"
-	install -m 644 README.md "$(DESTDIR)$(PREFIX)/share/doc/ssh-agent-switcher/README.md"
+	install -m 755 "$(BIN)" "$(DESTDIR)$(PREFIX)/bin/unix-socket-switcher"
+	install -m 755 -d "$(DESTDIR)$(PREFIX)/share/doc/unix-socket-switcher"
+	install -m 644 COPYING "$(DESTDIR)$(PREFIX)/share/doc/unix-socket-switcher/COPYING"
+	install -m 644 NEWS.md "$(DESTDIR)$(PREFIX)/share/doc/unix-socket-switcher/NEWS.md"
+	install -m 644 README.md "$(DESTDIR)$(PREFIX)/share/doc/unix-socket-switcher/README.md"
 	install -m 755 -d "$(DESTDIR)$(PREFIX)/share/man/man1"
-	install -m 644 ssh-agent-switcher.1 "$(DESTDIR)$(PREFIX)/share/man/man1/ssh-agent-switcher.1"
+	install -m 644 unix-socket-switcher.1 "$(DESTDIR)$(PREFIX)/share/man/man1/unix-socket-switcher.1"
 
 .PHONY: clean
 clean:

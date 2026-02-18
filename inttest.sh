@@ -9,7 +9,7 @@
 # * Redistributions in binary form must reproduce the above copyright notice, this list of
 #   conditions and the following disclaimer in the documentation and/or other materials provided with
 #   the distribution.
-# * Neither the name of ssh-agent-switcher nor the names of its contributors may be used to endorse
+# * Neither the name of unix-socket-switcher nor the names of its contributors may be used to endorse
 #   or promote products derived from this software without specific prior written permission.
 #
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
@@ -24,7 +24,7 @@
 shtk_import unittest
 
 export RUST_LOG=trace
-SSH_AGENT_SWITCHER="../target/${MODE-debug}/ssh-agent-switcher"
+SSH_AGENT_SWITCHER="../target/${MODE-debug}/unix-socket-switcher"
 
 shtk_unittest_add_fixture standalone
 standalone_fixture() {
@@ -286,10 +286,10 @@ daemonize_fixture() {
     shtk_unittest_add_test xdg_dirs
     xdg_dirs_test() {
         local log_dir="$(pwd)/test-state"
-        local log_file="${log_dir}/ssh-agent-switcher.log"
+        local log_file="${log_dir}/unix-socket-switcher.log"
 
         local pid_dir="$(pwd)/test-runtime"
-        local pid_file="${pid_dir}/ssh-agent-switcher.pid"
+        local pid_file="${pid_dir}/unix-socket-switcher.pid"
         mkdir -p "${pid_dir}"  # XDG expects the directory to exist.
         chmod 0700 "${pid_dir}"  # XDG expects tight permissions.
 
@@ -303,10 +303,10 @@ daemonize_fixture() {
     shtk_unittest_add_test xdg_runtime_dir_not_set
     xdg_runtime_dir_not_set_test() {
         local log_dir="$(pwd)/test-state"
-        local log_file="${log_dir}/ssh-agent-switcher.log"
+        local log_file="${log_dir}/unix-socket-switcher.log"
 
         local pid_dir="${log_dir}"  # Default fallback if XDG_RUNTIME_DIR is not set.
-        local pid_file="${pid_dir}/ssh-agent-switcher.pid"
+        local pid_file="${pid_dir}/unix-socket-switcher.pid"
         mkdir -p "${pid_dir}"  # XDG expects the directory to exist.
         chmod 0700 "${pid_dir}"  # XDG expects tight permissions.
 

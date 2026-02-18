@@ -15,7 +15,7 @@ use tempfile::TempDir;
 
 /// Get the path to the built binary.
 fn binary_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ssh-agent-switcher"))
+    PathBuf::from(env!("CARGO_BIN_EXE_unix-socket-switcher"))
 }
 
 /// A running backend task.
@@ -59,7 +59,11 @@ fn spawn_echo_backend(socket_path: &std::path::Path) -> BackendTask {
         }
     });
 
-    BackendTask { socket_path: socket_path.to_path_buf(), shutdown, _handle: handle }
+    BackendTask {
+        socket_path: socket_path.to_path_buf(),
+        shutdown,
+        _handle: handle,
+    }
 }
 
 impl Drop for BackendTask {
@@ -133,7 +137,9 @@ fn test_systemd_activation() {
 
     // Connect to the socket and verify it works
     let mut client = UnixStream::connect(&socket_path).expect("Failed to connect to socket");
-    client.set_read_timeout(Some(Duration::from_secs(2))).expect("Failed to set timeout");
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("Failed to set timeout");
     client.write_all(b"hello").expect("Failed to write");
 
     let mut response = vec![0u8; 5];
@@ -148,5 +154,8 @@ fn test_systemd_activation() {
     child.wait().expect("Failed to wait for child");
 
     // With systemd activation, the socket should NOT be removed (systemd owns it)
-    assert!(socket_path.exists(), "Socket should not be removed in systemd activation mode");
+    assert!(
+        socket_path.exists(),
+        "Socket should not be removed in systemd activation mode"
+    );
 }

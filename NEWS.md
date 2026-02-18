@@ -11,12 +11,12 @@
 **Released on 2025-12-25.**
 
 *   Added support for daemonization, making it easier (and more reliable)
-    to start ssh-agent-switcher from login scripts.
+    to start unix-socket-switcher from login scripts.
 
 *   Added a manual page.
 
 *   Fixed long-standing issue where long agent responses with many keys
-    locked up the ssh-agent-switcher due to short internal buffers.
+    locked up the unix-socket-switcher due to short internal buffers.
     The proxying logic now supports partial reads and writes.
 
 *   Rewrote the codebase (in Rust) to support adding new features and to
@@ -29,5 +29,5 @@
 
 **Never released.**
 
-*   ssh-agent-switcher was first published on 2023-11-14 as a code dump
+*   unix-socket-switcher was first published on 2023-11-14 as a code dump
     and never had a formal release file.

@@ -57,12 +57,12 @@ check_install() {
     trap "rm -rf '${root}'" EXIT
 
     make install PREFIX="${root}"
-    "${root}/bin/ssh-agent-switcher" -h 2>&1 | grep 'Usage: ssh-agent-switcher'
-    local debug_size="$(stat -c '%s' "${root}/bin/ssh-agent-switcher")"
+    "${root}/bin/unix-socket-switcher" -h 2>&1 | grep 'Usage: unix-socket-switcher'
+    local debug_size="$(stat -c '%s' "${root}/bin/unix-socket-switcher")"
 
     make install MODE=release PREFIX="${root}"
-    "${root}/bin/ssh-agent-switcher" -h 2>&1 | grep 'Usage: ssh-agent-switcher'
-    local release_size="$(stat -c '%s' "${root}/bin/ssh-agent-switcher")"
+    "${root}/bin/unix-socket-switcher" -h 2>&1 | grep 'Usage: unix-socket-switcher'
+    local release_size="$(stat -c '%s' "${root}/bin/unix-socket-switcher")"
 
     [ "${release_size}" -lt "${debug_size}" ] \
         || err "Release binary is larger than debug binary"

@@ -1,13 +1,13 @@
 [package]
-name = "ssh-agent-switcher"
+name = "unix-socket-switcher"
 version = "1.0.1"
 license = "BSD-3-Clause"
 authors = ["Julio Merino <julio@meroh.net>"]
 categories = ["command-line-utilities"]
-keywords = ["screen", "ssh", "ssh-agent", "tmux"]
-description = "SSH agent forwarding and tmux done right"
-homepage = "https://github.com/jmmv/ssh-agent-switcher/"
-repository = "https://github.com/jmmv/ssh-agent-switcher.git"
+keywords = ["unix-socket", "proxy", "ssh-agent", "tmux"]
+description = "Unix socket proxy/switcher daemon with glob-based target discovery"
+homepage = "https://github.com/dpc/unix-socket-switcher/"
+repository = "https://github.com/dpc/unix-socket-switcher.git"
 readme = "README.md"
 edition = "2024"
 

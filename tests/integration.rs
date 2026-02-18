@@ -34,7 +34,7 @@ fn wait_for_path_gone(path: &Path, timeout: Duration) -> bool {
 
 /// Get the path to the built binary.
 fn binary_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ssh-agent-switcher"))
+    PathBuf::from(env!("CARGO_BIN_EXE_unix-socket-switcher"))
 }
 
 /// A running backend task.
@@ -73,7 +73,11 @@ fn spawn_backend(socket_path: &Path, backend_type: BackendType) -> BackendTask {
         }
     });
 
-    BackendTask { socket_path: socket_path.to_path_buf(), shutdown, _handle: handle }
+    BackendTask {
+        socket_path: socket_path.to_path_buf(),
+        shutdown,
+        _handle: handle,
+    }
 }
 
 fn handle_backend_connection(mut stream: UnixStream, backend_type: BackendType) {
@@ -113,7 +117,11 @@ struct Backend {
 
 impl Backend {
     fn new(socket_path: PathBuf, backend_type: BackendType) -> Self {
-        Self { socket_path, backend_type, task: None }
+        Self {
+            socket_path,
+            backend_type,
+            task: None,
+        }
     }
 
     fn start(&mut self) {
@@ -223,7 +231,10 @@ impl SwitcherProcess {
     fn wait_if_foreground(self) {
         if let SwitcherProcess::Foreground(mut child) = self {
             let status = child.wait().expect("Failed to wait for child");
-            assert!(status.success(), "Process did not exit successfully after SIGINT");
+            assert!(
+                status.success(),
+                "Process did not exit successfully after SIGINT"
+            );
         }
     }
 }
@@ -241,9 +252,12 @@ fn start_switcher(env: &TestEnv, daemon: bool) -> SwitcherProcess {
             .arg("--log-file")
             .arg(&env.log_file)
             .status()
-            .expect("Failed to start ssh-agent-switcher");
+            .expect("Failed to start unix-socket-switcher");
 
-        assert!(status.success(), "Daemon parent process should exit successfully");
+        assert!(
+            status.success(),
+            "Daemon parent process should exit successfully"
+        );
 
         let pid_str = std::fs::read_to_string(&env.pid_file).expect("Failed to read PID file");
         let pid: libc::pid_t = pid_str.trim().parse().expect("Failed to parse PID");
@@ -255,7 +269,7 @@ fn start_switcher(env: &TestEnv, daemon: bool) -> SwitcherProcess {
             .arg("--target-glob")
             .arg(&env.target_glob)
             .spawn()
-            .expect("Failed to start ssh-agent-switcher");
+            .expect("Failed to start unix-socket-switcher");
 
         SwitcherProcess::Foreground(child)
     }
@@ -277,8 +291,13 @@ fn run_switcher_test(daemon: bool) {
 
     // Test 1: Echo backend is active, should echo back
     let test_data = b"Hello, SSH agent!";
-    let response = env.exchange(test_data).expect("Failed to exchange with echo backend");
-    assert_eq!(&response, test_data, "Echo backend should echo back exactly");
+    let response = env
+        .exchange(test_data)
+        .expect("Failed to exchange with echo backend");
+    assert_eq!(
+        &response, test_data,
+        "Echo backend should echo back exactly"
+    );
 
     // Test 2: Stop echo, start always-a backend
     env.echo_backend.stop();
@@ -294,8 +313,13 @@ fn run_switcher_test(daemon: bool) {
 
     // Should now get 'a's back
     let test_data = b"Hello!";
-    let response = env.exchange(test_data).expect("Failed to exchange with always-a backend");
-    assert_eq!(&response, b"aaaaaa", "Always-a backend should return all 'a's");
+    let response = env
+        .exchange(test_data)
+        .expect("Failed to exchange with always-a backend");
+    assert_eq!(
+        &response, b"aaaaaa",
+        "Always-a backend should return all 'a's"
+    );
 
     // Test 3: Start echo backend again (both running), should connect to first found
     env.echo_backend.start();
@@ -308,7 +332,10 @@ fn run_switcher_test(daemon: bool) {
     let test_data = b"Test";
     let response = env.exchange(test_data).expect("Failed to exchange");
     // Should get 'a's since always-a.sock is sorted before echo.sock
-    assert_eq!(&response, b"aaaa", "Should connect to always-a (sorted first)");
+    assert_eq!(
+        &response, b"aaaa",
+        "Should connect to always-a (sorted first)"
+    );
 
     // Test 4: Stop always-a, should fall back to echo
     env.always_a_backend.stop();
@@ -318,7 +345,9 @@ fn run_switcher_test(daemon: bool) {
     );
 
     let test_data = b"Fallback test";
-    let response = env.exchange(test_data).expect("Failed to exchange with echo backend");
+    let response = env
+        .exchange(test_data)
+        .expect("Failed to exchange with echo backend");
     assert_eq!(&response, test_data, "Should fall back to echo backend");
 
     // Test 5: Stop all backends, connection should fail
@@ -328,7 +357,10 @@ fn run_switcher_test(daemon: bool) {
         "Echo socket should be removed"
     );
 
-    assert!(env.exchange_should_fail(b"No backend"), "Should fail when no backend is available");
+    assert!(
+        env.exchange_should_fail(b"No backend"),
+        "Should fail when no backend is available"
+    );
 
     // Test 6: Restart a backend, should work again
     env.echo_backend.start();
@@ -338,8 +370,13 @@ fn run_switcher_test(daemon: bool) {
     );
 
     let test_data = b"Back online";
-    let response = env.exchange(test_data).expect("Failed to exchange after restart");
-    assert_eq!(&response, test_data, "Echo backend should work after restart");
+    let response = env
+        .exchange(test_data)
+        .expect("Failed to exchange after restart");
+    assert_eq!(
+        &response, test_data,
+        "Echo backend should work after restart"
+    );
 
     // Clean up: send SIGINT and wait for process to exit
     process.send_sigint();
@@ -395,7 +432,7 @@ fn test_communication_patterns() {
         .arg("--target-glob")
         .arg(&target_glob)
         .spawn()
-        .expect("Failed to start ssh-agent-switcher");
+        .expect("Failed to start unix-socket-switcher");
 
     assert!(
         wait_for_path(&switcher_socket, Duration::from_secs(5)),
@@ -405,8 +442,12 @@ fn test_communication_patterns() {
     // Helper to create a connected stream
     let connect = || {
         let stream = UnixStream::connect(&switcher_socket).expect("Failed to connect");
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         stream
     };
 
@@ -423,7 +464,9 @@ fn test_communication_patterns() {
     for size in [1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256] {
         let mut stream = connect();
         let data: Vec<u8> = (0..size).map(|i| (i & 0xFF) as u8).collect();
-        stream.write_all(&data).unwrap_or_else(|e| panic!("Failed to write {size} bytes: {e}"));
+        stream
+            .write_all(&data)
+            .unwrap_or_else(|e| panic!("Failed to write {size} bytes: {e}"));
         let mut response = vec![0u8; size];
         stream
             .read_exact(&mut response)
@@ -435,7 +478,9 @@ fn test_communication_patterns() {
     for size in [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536] {
         let mut stream = connect();
         let data: Vec<u8> = (0..size).map(|i| (i & 0xFF) as u8).collect();
-        stream.write_all(&data).unwrap_or_else(|e| panic!("Failed to write {size} bytes: {e}"));
+        stream
+            .write_all(&data)
+            .unwrap_or_else(|e| panic!("Failed to write {size} bytes: {e}"));
         let mut response = vec![0u8; size];
         stream
             .read_exact(&mut response)
@@ -450,7 +495,9 @@ fn test_communication_patterns() {
             let data = [i, i.wrapping_add(1), i.wrapping_add(2)];
             stream.write_all(&data).expect("Ping-pong write failed");
             let mut response = [0u8; 3];
-            stream.read_exact(&mut response).expect("Ping-pong read failed");
+            stream
+                .read_exact(&mut response)
+                .expect("Ping-pong read failed");
             assert_eq!(response, data, "Ping-pong failed at iteration {i}");
         }
     }
@@ -463,17 +510,22 @@ fn test_communication_patterns() {
 
         // Write all chunks
         for i in 0..num_chunks {
-            let data: Vec<u8> =
-                (0..chunk_size).map(|j| ((i * chunk_size + j) & 0xFF) as u8).collect();
+            let data: Vec<u8> = (0..chunk_size)
+                .map(|j| ((i * chunk_size + j) & 0xFF) as u8)
+                .collect();
             stream.write_all(&data).expect("Buffered write failed");
         }
 
         // Read all chunks back
         let mut all_response = vec![0u8; chunk_size * num_chunks];
-        stream.read_exact(&mut all_response).expect("Buffered read failed");
+        stream
+            .read_exact(&mut all_response)
+            .expect("Buffered read failed");
 
         // Verify
-        let expected: Vec<u8> = (0..(chunk_size * num_chunks)).map(|i| (i & 0xFF) as u8).collect();
+        let expected: Vec<u8> = (0..(chunk_size * num_chunks))
+            .map(|i| (i & 0xFF) as u8)
+            .collect();
         assert_eq!(all_response, expected, "Buffered echo failed");
     }
 
@@ -485,7 +537,9 @@ fn test_communication_patterns() {
             let data: Vec<u8> = (0..size).map(|i| (i & 0xFF) as u8).collect();
             stream.write_all(&data).expect("Interleaved write failed");
             let mut response = vec![0u8; size];
-            stream.read_exact(&mut response).expect("Interleaved read failed");
+            stream
+                .read_exact(&mut response)
+                .expect("Interleaved read failed");
             assert_eq!(response, data, "Interleaved echo failed for size {size}");
         }
     }
@@ -497,13 +551,17 @@ fn test_communication_patterns() {
                 let socket = switcher_socket.clone();
                 thread::spawn(move || {
                     let mut stream = UnixStream::connect(&socket).expect("Failed to connect");
-                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
 
                     for i in 0..20u8 {
                         let data = [conn_id as u8, i, conn_id as u8 ^ i];
                         stream.write_all(&data).expect("Concurrent write failed");
                         let mut response = [0u8; 3];
-                        stream.read_exact(&mut response).expect("Concurrent read failed");
+                        stream
+                            .read_exact(&mut response)
+                            .expect("Concurrent read failed");
                         assert_eq!(response, data, "Concurrent echo failed");
                     }
                 })

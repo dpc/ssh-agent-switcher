@@ -1,6 +1,6 @@
 //! Integration tests translated from inttest.sh
 //!
-//! Some tests require `ssh-agent` and `ssh-add` to be available.
+//! Some tests require `ssh-agent` and `ssh-add` to be available for the SSH agent tests.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -11,7 +11,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 fn binary_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_ssh-agent-switcher"))
+    PathBuf::from(env!("CARGO_BIN_EXE_unix-socket-switcher"))
 }
 
 fn wait_for_path(path: &Path, timeout: Duration) -> bool {
@@ -94,16 +94,22 @@ fn test_ignore_sighup() {
         .arg("/nonexistent")
         .stderr(Stdio::null())
         .spawn()
-        .expect("Failed to start ssh-agent-switcher");
+        .expect("Failed to start unix-socket-switcher");
 
-    assert!(wait_for_path(&socket, Duration::from_secs(5)), "Socket was not created");
+    assert!(
+        wait_for_path(&socket, Duration::from_secs(5)),
+        "Socket was not created"
+    );
 
     // Send SIGHUP
     send_signal(child.id() as libc::pid_t, libc::SIGHUP);
 
     // Wait a bit and verify socket still exists (daemon didn't exit)
     thread::sleep(Duration::from_millis(100));
-    assert!(socket.exists(), "Daemon exited after SIGHUP - socket was deleted");
+    assert!(
+        socket.exists(),
+        "Daemon exited after SIGHUP - socket was deleted"
+    );
 
     // Clean up
     send_signal(child.id() as libc::pid_t, libc::SIGTERM);
@@ -168,7 +174,7 @@ impl TestEnv {
             .env("RUST_LOG", "trace")
             .stderr(fs::File::create(&log_file).unwrap())
             .spawn()
-            .expect("Failed to start ssh-agent-switcher");
+            .expect("Failed to start unix-socket-switcher");
 
         if !wait_for_path(&switcher_socket, Duration::from_secs(5)) {
             send_signal(agent_pid as libc::pid_t, libc::SIGTERM);
@@ -244,7 +250,11 @@ fn test_add_identity() {
         .expect("Failed to run ssh-add");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Identity added"), "Expected 'Identity added', got: {}", stderr);
+    assert!(
+        stderr.contains("Identity added"),
+        "Expected 'Identity added', got: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -303,8 +313,8 @@ fn test_daemonize_xdg_dirs() {
     fs::create_dir(&sockets_root).unwrap();
 
     let socket = sockets_root.join("socket");
-    let expected_log = state_dir.join("ssh-agent-switcher.log");
-    let expected_pid = runtime_dir.join("ssh-agent-switcher.pid");
+    let expected_log = state_dir.join("unix-socket-switcher.log");
+    let expected_pid = runtime_dir.join("unix-socket-switcher.pid");
 
     let status = Command::new(binary_path())
         .arg("--daemon")
@@ -316,14 +326,24 @@ fn test_daemonize_xdg_dirs() {
         .env("XDG_STATE_HOME", &state_dir)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         .status()
-        .expect("Failed to start ssh-agent-switcher");
+        .expect("Failed to start unix-socket-switcher");
 
     assert!(status.success(), "Daemon parent should exit successfully");
-    assert!(expected_pid.exists(), "PID file should be created at XDG location");
-    assert!(expected_log.exists(), "Log file should be created at XDG location");
+    assert!(
+        expected_pid.exists(),
+        "PID file should be created at XDG location"
+    );
+    assert!(
+        expected_log.exists(),
+        "Log file should be created at XDG location"
+    );
 
     // Read PID and kill daemon
-    let pid: libc::pid_t = fs::read_to_string(&expected_pid).unwrap().trim().parse().unwrap();
+    let pid: libc::pid_t = fs::read_to_string(&expected_pid)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
 
     send_signal(pid, libc::SIGTERM);
     assert!(
@@ -346,9 +366,9 @@ fn test_daemonize_xdg_runtime_dir_not_set() {
     fs::create_dir(&sockets_root).unwrap();
 
     let socket = sockets_root.join("socket");
-    let expected_log = state_dir.join("ssh-agent-switcher.log");
+    let expected_log = state_dir.join("unix-socket-switcher.log");
     // When XDG_RUNTIME_DIR is not set, PID file falls back to state dir
-    let expected_pid = state_dir.join("ssh-agent-switcher.pid");
+    let expected_pid = state_dir.join("unix-socket-switcher.pid");
 
     let status = Command::new(binary_path())
         .arg("--daemon")
@@ -360,7 +380,7 @@ fn test_daemonize_xdg_runtime_dir_not_set() {
         .env("XDG_STATE_HOME", &state_dir)
         .env_remove("XDG_RUNTIME_DIR")
         .status()
-        .expect("Failed to start ssh-agent-switcher");
+        .expect("Failed to start unix-socket-switcher");
 
     assert!(status.success(), "Daemon parent should exit successfully");
     assert!(
@@ -370,7 +390,11 @@ fn test_daemonize_xdg_runtime_dir_not_set() {
     assert!(expected_log.exists(), "Log file should be created");
 
     // Read PID and kill daemon
-    let pid: libc::pid_t = fs::read_to_string(&expected_pid).unwrap().trim().parse().unwrap();
+    let pid: libc::pid_t = fs::read_to_string(&expected_pid)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
 
     send_signal(pid, libc::SIGTERM);
     wait_for_path_gone(&expected_pid, Duration::from_secs(2));
@@ -401,14 +425,18 @@ fn test_daemonize_explicit_files() {
         .arg(&pid_file)
         .env("HOME", &fake_home)
         .status()
-        .expect("Failed to start ssh-agent-switcher");
+        .expect("Failed to start unix-socket-switcher");
 
     assert!(status.success(), "Daemon parent should exit successfully");
     assert!(pid_file.exists(), "Explicit PID file should be created");
     assert!(log_file.exists(), "Explicit log file should be created");
 
     // Read PID and kill daemon
-    let pid: libc::pid_t = fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+    let pid: libc::pid_t = fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
 
     send_signal(pid, libc::SIGTERM);
     assert!(
@@ -444,7 +472,7 @@ fn test_daemonize_double_start() {
         .arg(&pid_file)
         .env("HOME", &fake_home)
         .status()
-        .expect("Failed to start ssh-agent-switcher");
+        .expect("Failed to start unix-socket-switcher");
 
     assert!(status.success(), "First daemon should start successfully");
 
@@ -466,10 +494,17 @@ fn test_daemonize_double_start() {
         .status();
 
     // Verify second socket was NOT created (the main point of this test)
-    assert!(!socket2.exists(), "Second daemon should not have started - socket2 should not exist");
+    assert!(
+        !socket2.exists(),
+        "Second daemon should not have started - socket2 should not exist"
+    );
 
     // Clean up first daemon
-    let pid: libc::pid_t = fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+    let pid: libc::pid_t = fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
 
     send_signal(pid, libc::SIGTERM);
     wait_for_path_gone(&pid_file, Duration::from_secs(2));

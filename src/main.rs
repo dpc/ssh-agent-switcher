@@ -9,7 +9,7 @@
 // * Redistributions in binary form must reproduce the above copyright notice, this list of
 //   conditions and the following disclaimer in the documentation and/or other materials provided with
 //   the distribution.
-// * Neither the name of ssh-agent-switcher nor the names of its contributors may be used to endorse
+// * Neither the name of unix-socket-switcher nor the names of its contributors may be used to endorse
 //   or promote products derived from this software without specific prior written permission.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
@@ -50,7 +50,7 @@ fn get_target_globs(matches: &Matches) -> Result<Vec<String>> {
 /// Returns the default value of the `--log-file` flag.
 fn default_log_file(xdg_dirs: &BaseDirectories) -> Result<PathBuf> {
     xdg_dirs
-        .place_state_file("ssh-agent-switcher.log")
+        .place_state_file("unix-socket-switcher.log")
         .map_err(|e| anyhow!("Cannot create XDG_STATE_HOME: {}", e))
 }
 
@@ -64,14 +64,14 @@ fn get_log_file(matches: &Matches, xdg_dirs: &BaseDirectories) -> Result<PathBuf
 
 /// Returns the default value of the `--pid-file` flag.
 fn default_pid_file(xdg_dirs: &BaseDirectories) -> Result<PathBuf> {
-    match xdg_dirs.place_runtime_file("ssh-agent-switcher.pid") {
+    match xdg_dirs.place_runtime_file("unix-socket-switcher.pid") {
         Ok(path) => Ok(path),
         Err(_) => {
             // XDG_RUNTIME_DIR *must* be set, but it's quite annoying to fail when it's not.
             // The variable being missing is the default case for FreeBSD, so make this more
             // friendly in that case.
             xdg_dirs
-                .place_state_file("ssh-agent-switcher.pid")
+                .place_state_file("unix-socket-switcher.pid")
                 .map_err(|e| anyhow!("Cannot create XDG_RUNTIME_DIR: {}", e))
         }
     }
@@ -96,10 +96,18 @@ fn get_socket_path(matches: &Matches) -> Result<PathBuf> {
 fn app_extra_help(output: &mut dyn io::Write) -> io::Result<()> {
     let xdg_dirs = BaseDirectories::new();
     if let Ok(log_file) = default_log_file(&xdg_dirs) {
-        writeln!(output, "If --log-file is not set, the default path is {}", log_file.display())?;
+        writeln!(
+            output,
+            "If --log-file is not set, the default path is {}",
+            log_file.display()
+        )?;
     }
     if let Ok(pid_file) = default_pid_file(&xdg_dirs) {
-        writeln!(output, "If --pid-file is not set, the default path is {}", pid_file.display())?;
+        writeln!(
+            output,
+            "If --pid-file is not set, the default path is {}",
+            pid_file.display()
+        )?;
     }
 
     Ok(())
@@ -107,9 +115,9 @@ fn app_extra_help(output: &mut dyn io::Write) -> io::Result<()> {
 
 fn app_setup(builder: Builder) -> Builder {
     builder
-        .bugs("https://github.com/jmmv/ssh-agent-switcher/issues/")
+        .bugs("https://github.com/dpc/unix-socket-switcher/issues/")
         .copyright("Copyright 2023-2026 Julio Merino")
-        .homepage("https://github.com/jmmv/ssh-agent-switcher/")
+        .homepage("https://github.com/dpc/unix-socket-switcher/")
         .extra_help(app_extra_help)
         .disable_init_env_logger()
         .optmulti(
@@ -119,7 +127,12 @@ fn app_setup(builder: Builder) -> Builder {
             "GLOB",
         )
         .optflag("", "daemon", "run in the background")
-        .optopt("", "log-file", "path to the file where to write logs", "path")
+        .optopt(
+            "",
+            "log-file",
+            "path to the file where to write logs",
+            "path",
+        )
         .optopt("", "pid-file", "path to the PID file to create", "path")
         .optopt(
             "",
@@ -133,7 +146,7 @@ fn daemon_parent(log_file: PathBuf, pid_file: PathBuf) -> Result<i32> {
     info!("Log file: {}", log_file.display());
     info!("PID file: {}", pid_file.display());
     // Socket is already created before daemonizing, so we only wait for the PID file
-    let pid_content = ssh_agent_switcher::wait_for_file(&pid_file, MAX_CHILD_WAIT)
+    let pid_content = unix_socket_switcher::wait_for_file(&pid_file, MAX_CHILD_WAIT)
         .map_err(|e| anyhow!("Daemon failed to start on time: {}", e))?;
     info!("PID is: {}", pid_content.trim());
     Ok(0)
@@ -145,7 +158,7 @@ fn daemon_child(
     pid_file: PathBuf,
     systemd_activated: bool,
 ) -> Result<i32> {
-    if let Err(e) = ssh_agent_switcher::run(listener, target_globs, pid_file, systemd_activated) {
+    if let Err(e) = unix_socket_switcher::run(listener, target_globs, pid_file, systemd_activated) {
         bail!("{}", e);
     }
     Ok(0)
@@ -170,7 +183,7 @@ fn app_main(matches: Matches) -> Result<i32> {
         // No systemd socket, create our own
         let socket_path = get_socket_path(&matches)?;
         let listener =
-            ssh_agent_switcher::create_listener(&socket_path).map_err(|e| anyhow!("{}", e))?;
+            unix_socket_switcher::create_listener(&socket_path).map_err(|e| anyhow!("{}", e))?;
         (listener, false)
     };
 
@@ -180,9 +193,16 @@ fn app_main(matches: Matches) -> Result<i32> {
         }
 
         let socket_path = get_socket_path(&matches)?;
-        let log =
-            File::options().append(true).create(true).open(&log_file).map_err(|e| {
-                anyhow!("Failed to open/create log file {}: {}", log_file.display(), e)
+        let log = File::options()
+            .append(true)
+            .create(true)
+            .open(&log_file)
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to open/create log file {}: {}",
+                    log_file.display(),
+                    e
+                )
             })?;
 
         match Daemonize::new().pid_file(&pid_file).stderr(log).execute() {
@@ -218,4 +238,4 @@ fn app_main(matches: Matches) -> Result<i32> {
     }
 }
 
-app!("ssh-agent-switcher", app_setup, app_main);
+app!("unix-socket-switcher", app_setup, app_main);

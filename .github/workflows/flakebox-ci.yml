@@ -11,7 +11,7 @@ jobs:
     - name: Magic Nix Cache
       uses: DeterminateSystems/magic-nix-cache-action@v2
     - name: Build on ${{ matrix.host }}
-      run: nix build -L .#ci.ssh-agent-switcher
+      run: nix build -L .#ci.unix-socket-switcher
     strategy:
       matrix:
         host:

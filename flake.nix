@@ -1,5 +1,5 @@
 {
-  description = "ssh-agent-switcher";
+  description = "unix-socket-switcher";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
@@ -18,7 +18,7 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        projectName = "ssh-agent-switcher";
+        projectName = "unix-socket-switcher";
 
         flakeboxLib = flakebox.lib.mkLib pkgs {
           config = {
@@ -85,9 +85,7 @@
         legacyPackages = multiBuild;
 
         devShells = flakeboxLib.mkShells {
-          packages = [
-            pkgs.treefmt
-          ];
+          packages = [ ];
         };
       }
     );
