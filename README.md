@@ -52,6 +52,7 @@ with the following snippet:
 
 ```sh
 ~/.local/bin/ssh-agent-switcher --daemon \
+    --socket-path "/tmp/ssh-agent.${USER}" \
     --target-glob "$HOME/.ssh/agent/*" \
     --target-glob "/tmp/ssh-*/agent.*" \
     2>/dev/null || true
@@ -62,6 +63,7 @@ For `fish`, extend `~/.config/fish/config.fish` with the following:
 
 ```sh
 ~/.local/bin/ssh-agent-switcher --daemon \
+    --socket-path "/tmp/ssh-agent.$USER" \
     --target-glob "$HOME/.ssh/agent/*" \
     --target-glob "/tmp/ssh-*/agent.*" \
     &>/dev/null || true

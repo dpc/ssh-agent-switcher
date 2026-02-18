@@ -26,3 +26,9 @@ features = ["env_logger"]
 
 [dev-dependencies]
 tempfile = "3"
+
+[profile.ci]
+debug = "line-tables-only"
+incremental = false
+inherits = "dev"
+lto = "off"

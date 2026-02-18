@@ -34,13 +34,13 @@
 .Sh SYNOPSIS
 .Nm
 .Fl -target-glob Ar GLOB
-.Op Fl -socket-path Ar path
+.Fl -socket-path Ar path
 .Nm
 .Fl -daemon
 .Fl -target-glob Ar GLOB
+.Fl -socket-path Ar path
 .Op Fl -log-file Ar path
 .Op Fl -pid-file Ar path
-.Op Fl -socket-path Ar path
 .Nm
 .Fl -help
 .Nm
@@ -112,9 +112,7 @@ Specifies the location of the PID file to create when running in daemon mode.
 This is used as a lock to determine if the daemon should start again or not.
 .It Fl -socket-path Ar path
 Location where to create the listening socket.
-Defaults to
-.Pa /tmp/ssh-agent.${USER}
-and you should rarely change this.
+Required unless using systemd socket activation.
 .It Fl -version
 Show version information on stdout and exit.
 .El
@@ -127,6 +125,7 @@ or
 with the following snippet:
 .Bd -literal -offset indent
 ssh-agent-switcher --daemon \\
+    --socket-path "/tmp/ssh-agent.${USER}" \\
     --target-glob "$HOME/.ssh/agent/*" \\
     --target-glob "/tmp/ssh-*/agent.*" \\
     2>/dev/null || true
@@ -159,12 +158,6 @@ Path to where to store program-specific runtime files (the PID file).
 .El
 .Sh FILES
 .Bl -tag -width XXXX
-.It Pa /tmp/ssh-agent.${USER}
-Default listening socket created by
-.Nm .
-Set
-.Va SSH_AUTH_SOCK
-to this path.
 .It Pa ${XDG_RUNTIME_DIR}/ssh-agent-switcher.pid
 Default PID file when running in daemon mode.
 Falls back to

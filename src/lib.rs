@@ -190,17 +190,18 @@ pub fn run(
     Ok(())
 }
 
-/// Waits for `path` to exist for a maximum period of time using operation `op`.
-/// Returns the result of `op` on success.
-pub fn wait_for_file<P: AsRef<Path> + Copy, T>(
-    path: P,
-    mut pending_wait: Duration,
-    op: fn(P) -> io::Result<T>,
-) -> Result<T> {
+/// Waits for `path` to contain non-empty content for a maximum period of time.
+/// Uses `op` to read the file and returns its result on success.
+/// Retries on `NotFound` errors and on empty file content.
+pub fn wait_for_file(path: &Path, mut pending_wait: Duration) -> Result<String> {
     while pending_wait > Duration::ZERO {
-        match op(path) {
-            Ok(result) => {
-                return Ok(result);
+        match fs::read_to_string(path) {
+            Ok(content) if content.trim().is_empty() => {
+                // File exists but is empty (e.g. PID file not yet written)
+                pending_wait -= Duration::from_millis(1);
+            }
+            Ok(content) => {
+                return Ok(content);
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 pending_wait -= Duration::from_millis(1);

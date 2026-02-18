@@ -83,37 +83,6 @@ impl Drop for SwitcherProcess {
 // =============================================================================
 
 #[test]
-fn test_default_socket_path() {
-    let temp_dir = TempDir::new().unwrap();
-    let fake_home = temp_dir.path().join("home");
-    fs::create_dir(&fake_home).unwrap();
-
-    let default_socket = PathBuf::from("/tmp/ssh-agent.test-user-default-socket");
-
-    // Clean up any leftover socket from previous failed runs
-    let _ = fs::remove_file(&default_socket);
-
-    let mut child = Command::new(binary_path())
-        .arg("--target-glob")
-        .arg("/nonexistent")
-        .env("HOME", &fake_home)
-        .env("USER", "test-user-default-socket")
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("Failed to start ssh-agent-switcher");
-
-    assert!(
-        wait_for_path(&default_socket, Duration::from_secs(5)),
-        "Default socket was not created"
-    );
-
-    // Clean up
-    send_signal(child.id() as libc::pid_t, libc::SIGTERM);
-    child.wait().unwrap();
-    wait_for_path_gone(&default_socket, Duration::from_secs(2));
-}
-
-#[test]
 fn test_ignore_sighup() {
     let temp_dir = TempDir::new().unwrap();
     let socket = temp_dir.path().join("socket");

@@ -152,13 +152,16 @@ impl TestEnv {
     fn new() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
-        let echo_socket = temp_dir.path().join("echo.sock");
-        let always_a_socket = temp_dir.path().join("always-a.sock");
+        // Put backends in a subdirectory so the glob doesn't match the switcher socket
+        let backends_dir = temp_dir.path().join("backends");
+        std::fs::create_dir(&backends_dir).expect("Failed to create backends dir");
+        let echo_socket = backends_dir.join("echo.sock");
+        let always_a_socket = backends_dir.join("always-a.sock");
 
         let switcher_socket = temp_dir.path().join("switcher.sock");
         let pid_file = temp_dir.path().join("switcher.pid");
         let log_file = temp_dir.path().join("switcher.log");
-        let target_glob = format!("{}/*.sock", temp_dir.path().display());
+        let target_glob = format!("{}/*.sock", backends_dir.display());
 
         TestEnv {
             target_glob,
@@ -376,12 +379,14 @@ fn test_daemon_mode() {
 fn test_communication_patterns() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
-    // Create a single echo backend
-    let backend_socket = temp_dir.path().join("backend.sock");
+    // Put backend in a subdirectory so the glob doesn't match the switcher socket
+    let backends_dir = temp_dir.path().join("backends");
+    std::fs::create_dir(&backends_dir).expect("Failed to create backends dir");
+    let backend_socket = backends_dir.join("backend.sock");
     let _backend = spawn_backend(&backend_socket, BackendType::Echo);
 
     let switcher_socket = temp_dir.path().join("switcher.sock");
-    let target_glob = format!("{}/*.sock", temp_dir.path().display());
+    let target_glob = format!("{}/*.sock", backends_dir.display());
 
     // Start switcher
     let mut child = Command::new(binary_path())

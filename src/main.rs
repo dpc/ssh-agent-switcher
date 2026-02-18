@@ -29,22 +29,14 @@ use getoptsargs::prelude::*;
 use listenfd::ListenFd;
 use log::info;
 use std::fs::{self, File};
+use std::io;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::{env, io};
 use xdg::BaseDirectories;
 
 /// Maximum amount of time to wait for the child process to start when daemonization is enabled.
 const MAX_CHILD_WAIT: Duration = Duration::from_secs(10);
-
-/// Checks if the required `name` variable is present and returns its value.
-fn get_required_env_var(name: &str) -> Result<String> {
-    match env::var(name) {
-        Ok(value) => Ok(value),
-        Err(e) => bail!("{} variable is set but is not valid: {}", name, e),
-    }
-}
 
 /// Gets the value of the `--target-glob` flag.
 fn get_target_globs(matches: &Matches) -> Result<Vec<String>> {
@@ -93,30 +85,15 @@ fn get_pid_file(matches: &Matches, xdg_dirs: &BaseDirectories) -> Result<PathBuf
     }
 }
 
-/// Returns the default value of the `--socket-path` flag.
-fn default_socket_path() -> Result<PathBuf> {
-    let user = get_required_env_var("USER")?;
-    Ok(PathBuf::from(format!("/tmp/ssh-agent.{}", user)))
-}
-
-/// Gets the value of the `--socket-path` flag, computing a default if necessary.
+/// Gets the value of the required `--socket-path` flag.
 fn get_socket_path(matches: &Matches) -> Result<PathBuf> {
-    if let Some(s) = matches.opt_str("socket-path") {
-        return Ok(PathBuf::from(s));
+    match matches.opt_str("socket-path") {
+        Some(s) => Ok(PathBuf::from(s)),
+        None => bail!("--socket-path must be specified"),
     }
-
-    default_socket_path()
 }
 
 fn app_extra_help(output: &mut dyn io::Write) -> io::Result<()> {
-    if let Ok(socket_path) = default_socket_path() {
-        writeln!(
-            output,
-            "If --socket-path is not set, the default path is: {}",
-            socket_path.display()
-        )?;
-    }
-
     let xdg_dirs = BaseDirectories::new();
     if let Ok(log_file) = default_log_file(&xdg_dirs) {
         writeln!(output, "If --log-file is not set, the default path is {}", log_file.display())?;
@@ -144,16 +121,20 @@ fn app_setup(builder: Builder) -> Builder {
         .optflag("", "daemon", "run in the background")
         .optopt("", "log-file", "path to the file where to write logs", "path")
         .optopt("", "pid-file", "path to the PID file to create", "path")
-        .optopt("", "socket-path", "path to the socket to listen on", "path")
+        .optopt(
+            "",
+            "socket-path",
+            "path to the socket to listen on (required unless using systemd activation)",
+            "path",
+        )
 }
 
 fn daemon_parent(log_file: PathBuf, pid_file: PathBuf) -> Result<i32> {
     info!("Log file: {}", log_file.display());
     info!("PID file: {}", pid_file.display());
     // Socket is already created before daemonizing, so we only wait for the PID file
-    let pid_content =
-        ssh_agent_switcher::wait_for_file(&pid_file, MAX_CHILD_WAIT, fs::read_to_string)
-            .map_err(|e| anyhow!("Daemon failed to start on time: {}", e))?;
+    let pid_content = ssh_agent_switcher::wait_for_file(&pid_file, MAX_CHILD_WAIT)
+        .map_err(|e| anyhow!("Daemon failed to start on time: {}", e))?;
     info!("PID is: {}", pid_content.trim());
     Ok(0)
 }
