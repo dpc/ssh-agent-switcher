@@ -30,14 +30,14 @@
 .Os
 .Sh NAME
 .Nm ssh-agent-switcher
-.Nd Proxies SSH agent connections to any valid forwarded agent provided by sshd
+.Nd Proxies Unix socket connections to a target socket found via glob patterns
 .Sh SYNOPSIS
 .Nm
-.Op Fl -agents-dirs Ar dir1:..dirN
+.Fl -target-glob Ar GLOB
 .Op Fl -socket-path Ar path
 .Nm
 .Fl -daemon
-.Op Fl -agents-dirs Ar dir1:..dirN
+.Fl -target-glob Ar GLOB
 .Op Fl -log-file Ar path
 .Op Fl -pid-file Ar path
 .Op Fl -socket-path Ar path
@@ -47,46 +47,20 @@
 .Fl -version
 .Sh DESCRIPTION
 .Nm
-is a daemon that proxies SSH agent connections to any valid forwarded agent
-provided by sshd.
+is a daemon that proxies Unix socket connections to a target socket found
+via glob patterns.
 This allows long-lived processes such as terminal multiplexers like
 .Xr tmux 1
 or
 .Xr screen 1
-to access the connection-specific forwarded agents.
+to access connection-specific forwarded agents or other Unix sockets that
+may change paths across sessions.
 .Pp
-More specifically, this program can be used to fix the problem that arises in
-the following sequence of events:
-.Pp
-.Bl -enum -compact -offset XXXX
-.It
-Connect to an SSH server with SSH agent forwarding.
-.It
-Start a tmux session in the SSH server.
-.It
-Detach the tmux session.
-.It
-Log out of the SSH server.
-.It
-Reconnect to the SSH server with SSH agent forwarding.
-.It
-Attach to the existing tmux session.
-.It
-Run an SSH command.
-.It
-See the command fail to communicate with the forwarded agent.
-.El
-.Pp
-The
+A common use case is SSH agent forwarding: when you reconnect to an SSH
+server, the forwarded agent socket path changes, breaking existing sessions.
 .Nm
-daemon solves this problem by exposing an SSH agent socket at a well-known
-location, allowing you to set
-.Va SSH_AUTH_SOCK
-to a path that does
-.Em not
-change across different connections.
-The daemon then looks for a valid socket every time it receives a request and
-forwards the request to the real forwarded agent.
+solves this by exposing a socket at a well-known location and forwarding
+to the real socket found via a glob pattern.
 .Pp
 In the first usage form,
 .Nm
@@ -121,11 +95,10 @@ prints version information to stdout and exits.
 .Pp
 The following flags are recognized:
 .Bl -tag
-.It Fl -agents-dirs Ar dir1..dirN
-Colon-separated list of directories that may contain sshd-provided agent
-sockets.
-The default value recognizes sockets creatd by OpenSSH before and after the
-naming scheme change that happened with the OpenSSH 10.1 release.
+.It Fl -target-glob Ar GLOB
+Glob pattern for target Unix socket(s) to connect to.
+This flag can be repeated to specify multiple patterns; they are tried in order.
+At least one pattern must be specified.
 .It Fl -daemon
 Enable daemon mode.
 You should always use this flag.
@@ -138,7 +111,7 @@ in daemon mode.
 Specifies the location of the PID file to create when running in daemon mode.
 This is used as a lock to determine if the daemon should start again or not.
 .It Fl -socket-path Ar path
-Location where to create the listening agent socket.
+Location where to create the listening socket.
 Defaults to
 .Pa /tmp/ssh-agent.${USER}
 and you should rarely change this.
@@ -146,17 +119,17 @@ and you should rarely change this.
 Show version information on stdout and exit.
 .El
 .Sh EXAMPLES
-The common mechanism to start
-.Nm
-is by hooking its startup in your user's login shell scripts (typically
+For SSH agent forwarding, extend your login script (typically
 .Pa ~/.login ,
 .Pa ~/.bash_login
 or
-.Pa ~/.zlogin ) .
-.Pp
-Add the following snippet to these scripts:
+.Pa ~/.zlogin )
+with the following snippet:
 .Bd -literal -offset indent
-ssh-agent-switcher --daemon 2>/dev/null || true
+ssh-agent-switcher --daemon \\
+    --target-glob "$HOME/.ssh/agent/*" \\
+    --target-glob "/tmp/ssh-*/agent.*" \\
+    2>/dev/null || true
 export SSH_AUTH_SOCK="/tmp/ssh-agent.${USER}"
 .Ed
 .Pp
@@ -164,10 +137,6 @@ As shown above, you should silence the stderr of the program to avoid getting
 uninteresting diagnostic messages to the console.
 .Sh ENVIRONMENT
 .Bl -tag -width XXXX
-.It Va HOME
-User's home directory.
-Used to locate the sshd agent sockets in OpenSSH versions 10.1 or newer, and to
-determine defaults for XDG-related variables.
 .It Va RUST_LOG
 Logging configuration.
 In the simplest form, this takes a log level name to determine the noisiness of
@@ -191,15 +160,11 @@ Path to where to store program-specific runtime files (the PID file).
 .Sh FILES
 .Bl -tag -width XXXX
 .It Pa /tmp/ssh-agent.${USER}
-Default agent socket created by
+Default listening socket created by
 .Nm .
 Set
-.Va SSH_AGENT_SOCK
+.Va SSH_AUTH_SOCK
 to this path.
-.It Pa /tmp/ssh-${RANDOM}/agent.${USER}
-Location of sshd-provided agent sockets for OpenSSH versions before 10.1.
-.It Pa ${HOME}/.ssh/agent
-Location of sshd-provided agent sockets for OpenSSH versions 10.1 or newer.
 .It Pa ${XDG_RUNTIME_DIR}/ssh-agent-switcher.pid
 Default PID file when running in daemon mode.
 Falls back to

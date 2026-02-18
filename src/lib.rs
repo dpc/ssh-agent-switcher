@@ -21,18 +21,18 @@
 // WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY
 // WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Serves a Unix domain socket that proxies connections to any valid SSH agent provided by sshd.
+//! Serves a Unix domain socket that proxies connections to a target Unix socket found via glob
+//! patterns.
 
 use log::{debug, info, warn};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 use signal_hook::iterator::Signals;
-use std::env;
 use std::fs;
 use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -87,16 +87,11 @@ fn handle_bi_socket_forwarding(client: UnixStream, agent: UnixStream) -> io::Res
 }
 
 /// Handles one incoming connection on `client`.
-fn handle_connection(
-    client: UnixStream,
-    agents_dirs: Arc<[PathBuf]>,
-    home: Option<PathBuf>,
-    uid: libc::uid_t,
-) {
-    let agent = match find::find_socket(&agents_dirs, home.as_deref(), uid) {
+fn handle_connection(client: UnixStream, target_globs: Arc<[String]>) {
+    let agent = match find::find_socket(&target_globs) {
         Some(socket) => socket,
         None => {
-            warn!("Dropping connection: no agent found");
+            warn!("Dropping connection: no target socket found");
             return;
         }
     };
@@ -108,14 +103,14 @@ fn handle_connection(
 
 /// Runs the core logic of the app.
 ///
-/// This serves the SSH agent socket using the provided `listener` and looks for sshd sockets
-/// in `agents_dirs`.
+/// This serves the listening socket using the provided `listener` and looks for target sockets
+/// matching `target_globs`.
 ///
 /// The `pid_file` is needed for cleanup purposes. If `systemd_activated` is true, the socket
 /// file will not be removed on exit (systemd owns it).
 pub fn run(
     listener: UnixListener,
-    agents_dirs: &[PathBuf],
+    target_globs: &[String],
     pid_file: PathBuf,
     systemd_activated: bool,
 ) -> Result<()> {
@@ -125,9 +120,7 @@ pub fn run(
         .and_then(|addr| addr.as_pathname().map(|p| p.to_path_buf()))
         .ok_or_else(|| "Cannot determine socket path from listener".to_string())?;
 
-    let home = env::var("HOME").map(|v| Some(PathBuf::from(v))).unwrap_or(None);
-    let uid = unsafe { libc::getuid() };
-    let agents_dirs: Arc<[PathBuf]> = agents_dirs.into();
+    let target_globs: Arc<[String]> = target_globs.into();
 
     // Set up signal handling with the atomic flag + reconnect pattern
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -168,9 +161,8 @@ pub fn run(
                 }
 
                 debug!("Connection accepted");
-                let agents_dirs = Arc::clone(&agents_dirs);
-                let home = home.clone();
-                thread::spawn(move || handle_connection(socket, agents_dirs, home, uid));
+                let target_globs = Arc::clone(&target_globs);
+                thread::spawn(move || handle_connection(socket, target_globs));
             }
             Err(e) => {
                 if shutdown.load(Ordering::SeqCst) {

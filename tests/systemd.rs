@@ -7,8 +7,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -59,11 +59,7 @@ fn spawn_echo_backend(socket_path: &std::path::Path) -> BackendTask {
         }
     });
 
-    BackendTask {
-        socket_path: socket_path.to_path_buf(),
-        shutdown,
-        _handle: handle,
-    }
+    BackendTask { socket_path: socket_path.to_path_buf(), shutdown, _handle: handle }
 }
 
 impl Drop for BackendTask {
@@ -85,21 +81,21 @@ fn test_systemd_activation() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let socket_path = temp_dir.path().join("systemd.sock");
 
-    // Create agent directory structure (must be ssh-* subdirectory with agent.* socket)
-    let agents_dir = temp_dir.path();
-    let backend_dir = agents_dir.join("ssh-backend");
-    fs::create_dir(&backend_dir).expect("Failed to create backend dir");
+    // Put backend socket in a separate backends/ subdir to avoid matching the systemd socket
+    let backends_dir = temp_dir.path().join("backends");
+    fs::create_dir(&backends_dir).expect("Failed to create backends dir");
 
     // Create backend socket so switcher has something to forward to
-    let backend = spawn_echo_backend(&backend_dir.join("agent.test"));
+    let backend = spawn_echo_backend(&backends_dir.join("echo.sock"));
+    let target_glob = format!("{}/*.sock", backends_dir.display());
 
     // Create the listener that simulates systemd's socket
     let listener = UnixListener::bind(&socket_path).expect("Failed to bind socket");
     let fd = listener.as_raw_fd();
 
     let mut cmd = Command::new(binary_path());
-    cmd.arg("--agents-dirs")
-        .arg(agents_dir)
+    cmd.arg("--target-glob")
+        .arg(&target_glob)
         .env("RUST_LOG", "info")
         .env("LISTEN_FDS", "1")
         // Don't set LISTEN_PID - listenfd will skip the PID check if it's empty
@@ -152,8 +148,5 @@ fn test_systemd_activation() {
     child.wait().expect("Failed to wait for child");
 
     // With systemd activation, the socket should NOT be removed (systemd owns it)
-    assert!(
-        socket_path.exists(),
-        "Socket should not be removed in systemd activation mode"
-    );
+    assert!(socket_path.exists(), "Socket should not be removed in systemd activation mode");
 }

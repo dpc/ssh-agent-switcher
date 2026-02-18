@@ -21,7 +21,8 @@
 // WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY
 // WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Serves a Unix domain socket that proxies connections to any valid SSH agent provided by sshd.
+//! Serves a Unix domain socket that proxies connections to a target Unix socket found via glob
+//! patterns.
 
 use daemonize::{Daemonize, Outcome};
 use getoptsargs::prelude::*;
@@ -45,21 +46,13 @@ fn get_required_env_var(name: &str) -> Result<String> {
     }
 }
 
-/// Returns the default value of the `--agents-dirs` flag.
-fn default_agents_dirs() -> Result<Vec<PathBuf>> {
-    // OpenSSH 10.1 moved agent sockets from /tmp to the user's home directory and uses
-    // a different naming scheme (no subdirectories and different names).
-    let home = get_required_env_var("HOME")?;
-    Ok(vec![PathBuf::from(format!("{}/.ssh/agent", home)), PathBuf::from("/tmp")])
-}
-
-/// Gets the value of the `--agents-dirs` flag, computing a default if necessary.
-fn get_agents_dirs(matches: &Matches) -> Result<Vec<PathBuf>> {
-    if let Some(s) = matches.opt_str("agents-dirs") {
-        return Ok(s.split(":").map(PathBuf::from).collect());
+/// Gets the value of the `--target-glob` flag.
+fn get_target_globs(matches: &Matches) -> Result<Vec<String>> {
+    let globs = matches.opt_strs("target-glob");
+    if globs.is_empty() {
+        bail!("At least one --target-glob must be specified");
     }
-
-    default_agents_dirs()
+    Ok(globs)
 }
 
 /// Returns the default value of the `--log-file` flag.
@@ -116,18 +109,6 @@ fn get_socket_path(matches: &Matches) -> Result<PathBuf> {
 }
 
 fn app_extra_help(output: &mut dyn io::Write) -> io::Result<()> {
-    if let Ok(agents_dirs) = default_agents_dirs() {
-        writeln!(
-            output,
-            "If --agents-dirs is not set, the default lookup location is: {}",
-            agents_dirs
-                .into_iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<String>>()
-                .join(":")
-        )?;
-    }
-
     if let Ok(socket_path) = default_socket_path() {
         writeln!(
             output,
@@ -154,11 +135,11 @@ fn app_setup(builder: Builder) -> Builder {
         .homepage("https://github.com/jmmv/ssh-agent-switcher/")
         .extra_help(app_extra_help)
         .disable_init_env_logger()
-        .optopt(
+        .optmulti(
             "",
-            "agents-dirs",
-            "colon-separated list of directories where to look for running agents",
-            "dir1:..:dirn",
+            "target-glob",
+            "glob pattern for target Unix socket(s) to connect to (can be repeated)",
+            "GLOB",
         )
         .optflag("", "daemon", "run in the background")
         .optopt("", "log-file", "path to the file where to write logs", "path")
@@ -179,11 +160,11 @@ fn daemon_parent(log_file: PathBuf, pid_file: PathBuf) -> Result<i32> {
 
 fn daemon_child(
     listener: UnixListener,
-    agents_dirs: &[PathBuf],
+    target_globs: &[String],
     pid_file: PathBuf,
     systemd_activated: bool,
 ) -> Result<i32> {
-    if let Err(e) = ssh_agent_switcher::run(listener, agents_dirs, pid_file, systemd_activated) {
+    if let Err(e) = ssh_agent_switcher::run(listener, target_globs, pid_file, systemd_activated) {
         bail!("{}", e);
     }
     Ok(0)
@@ -192,7 +173,7 @@ fn daemon_child(
 fn app_main(matches: Matches) -> Result<i32> {
     let xdg_dirs = BaseDirectories::new();
 
-    let agents_dirs = get_agents_dirs(&matches)?;
+    let target_globs = get_target_globs(&matches)?;
     let log_file = get_log_file(&matches, &xdg_dirs)?;
     let pid_file = get_pid_file(&matches, &xdg_dirs)?;
 
@@ -207,8 +188,8 @@ fn app_main(matches: Matches) -> Result<i32> {
     } else {
         // No systemd socket, create our own
         let socket_path = get_socket_path(&matches)?;
-        let listener = ssh_agent_switcher::create_listener(&socket_path)
-            .map_err(|e| anyhow!("{}", e))?;
+        let listener =
+            ssh_agent_switcher::create_listener(&socket_path).map_err(|e| anyhow!("{}", e))?;
         (listener, false)
     };
 
@@ -233,7 +214,7 @@ fn app_main(matches: Matches) -> Result<i32> {
             }
             Outcome::Child(Ok(_child)) => {
                 init_env_logger(&matches.program_name);
-                daemon_child(listener, &agents_dirs, pid_file, systemd_activated)
+                daemon_child(listener, &target_globs, pid_file, systemd_activated)
             }
             Outcome::Child(Err(e)) => {
                 let msg = e.to_string();
@@ -252,7 +233,7 @@ fn app_main(matches: Matches) -> Result<i32> {
         if !systemd_activated {
             info!("Running in the foreground: ignoring --log-file and --pid-file");
         }
-        daemon_child(listener, &agents_dirs, pid_file, systemd_activated)
+        daemon_child(listener, &target_globs, pid_file, systemd_activated)
     }
 }
 

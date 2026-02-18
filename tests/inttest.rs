@@ -66,9 +66,9 @@ impl Drop for SwitcherProcess {
         let timeout = Duration::from_secs(2);
         while start.elapsed() < timeout {
             match self.child.try_wait() {
-                Ok(Some(_)) => break, // Process exited
+                Ok(Some(_)) => break,                                 // Process exited
                 Ok(None) => thread::sleep(Duration::from_millis(10)), // Still running
-                Err(_) => break, // Error checking status
+                Err(_) => break,                                      // Error checking status
             }
         }
         // If still running after timeout, force kill
@@ -83,29 +83,6 @@ impl Drop for SwitcherProcess {
 // =============================================================================
 
 #[test]
-fn test_default_agents_dirs() {
-    let temp_dir = TempDir::new().unwrap();
-    let fake_home = temp_dir.path().join("home");
-    fs::create_dir(&fake_home).unwrap();
-
-    let output = Command::new(binary_path())
-        .arg("-h")
-        .env("HOME", &fake_home)
-        .env("USER", "fake-user")
-        .output()
-        .expect("Failed to run ssh-agent-switcher");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let expected_pattern = format!("{}/.ssh/agent:/tmp", fake_home.display());
-    assert!(
-        stdout.contains(&expected_pattern),
-        "Expected default agents dirs to contain '{}', got: {}",
-        expected_pattern,
-        stdout
-    );
-}
-
-#[test]
 fn test_default_socket_path() {
     let temp_dir = TempDir::new().unwrap();
     let fake_home = temp_dir.path().join("home");
@@ -117,6 +94,8 @@ fn test_default_socket_path() {
     let _ = fs::remove_file(&default_socket);
 
     let mut child = Command::new(binary_path())
+        .arg("--target-glob")
+        .arg("/nonexistent")
         .env("HOME", &fake_home)
         .env("USER", "test-user-default-socket")
         .stderr(Stdio::null())
@@ -142,14 +121,13 @@ fn test_ignore_sighup() {
     let mut child = Command::new(binary_path())
         .arg("--socket-path")
         .arg(&socket)
+        .arg("--target-glob")
+        .arg("/nonexistent")
         .stderr(Stdio::null())
         .spawn()
         .expect("Failed to start ssh-agent-switcher");
 
-    assert!(
-        wait_for_path(&socket, Duration::from_secs(5)),
-        "Socket was not created"
-    );
+    assert!(wait_for_path(&socket, Duration::from_secs(5)), "Socket was not created");
 
     // Send SIGHUP
     send_signal(child.id() as libc::pid_t, libc::SIGHUP);
@@ -164,18 +142,19 @@ fn test_ignore_sighup() {
 }
 
 // =============================================================================
-// integration_pre_openssh_10_1 fixture tests
+// integration tests with ssh-agent
 // =============================================================================
 
-struct PreOpenssh101Env {
+struct TestEnv {
     _temp_dir: TempDir,
     _agent_pid: u32,
     _switcher: SwitcherProcess,
     switcher_socket: PathBuf,
+    sockets_root: PathBuf,
     log_file: PathBuf,
 }
 
-impl PreOpenssh101Env {
+impl TestEnv {
     fn new() -> Option<Self> {
         if !has_ssh_agent() {
             return None;
@@ -188,10 +167,7 @@ impl PreOpenssh101Env {
         let sockets_root = temp_dir.path().join("sockets");
         fs::create_dir(&sockets_root).unwrap();
 
-        // Create ssh-zzz directory (sorts last for unknown files test)
-        let agent_dir = sockets_root.join("ssh-zzz");
-        fs::create_dir(&agent_dir).unwrap();
-        let agent_socket = agent_dir.join("agent.bar");
+        let agent_socket = sockets_root.join("agent.sock");
 
         // Start real ssh-agent
         let output = Command::new("ssh-agent")
@@ -210,223 +186,15 @@ impl PreOpenssh101Env {
             .and_then(|s| s.trim().parse().ok())
             .expect("Failed to parse SSH_AGENT_PID");
 
-        let switcher_socket = sockets_root.join("switcher");
+        let switcher_socket = temp_dir.path().join("switcher");
         let log_file = temp_dir.path().join("switcher.log");
+        let target_glob = format!("{}/*", sockets_root.display());
 
         let child = Command::new(binary_path())
             .arg("--socket-path")
             .arg(&switcher_socket)
-            .arg("--agents-dirs")
-            .arg(&sockets_root)
-            .env("HOME", &fake_home)
-            .env("RUST_LOG", "trace")
-            .stderr(fs::File::create(&log_file).unwrap())
-            .spawn()
-            .expect("Failed to start ssh-agent-switcher");
-
-        if !wait_for_path(&switcher_socket, Duration::from_secs(5)) {
-            send_signal(agent_pid as libc::pid_t, libc::SIGTERM);
-            panic!("Switcher socket was not created");
-        }
-
-        Some(Self {
-            _temp_dir: temp_dir,
-            _agent_pid: agent_pid,
-            _switcher: SwitcherProcess::new(child, switcher_socket.clone()),
-            switcher_socket,
-            log_file,
-        })
-    }
-
-    fn sockets_root(&self) -> PathBuf {
-        self.switcher_socket.parent().unwrap().to_path_buf()
-    }
-}
-
-impl Drop for PreOpenssh101Env {
-    fn drop(&mut self) {
-        send_signal(self._agent_pid as libc::pid_t, libc::SIGTERM);
-    }
-}
-
-#[test]
-fn test_pre_openssh_10_1_list_identities() {
-    let Some(env) = PreOpenssh101Env::new() else {
-        eprintln!("Skipping test: ssh-agent not available");
-        return;
-    };
-
-    let output = Command::new("ssh-add")
-        .arg("-l")
-        .env("SSH_AUTH_SOCK", &env.switcher_socket)
-        .output()
-        .expect("Failed to run ssh-add");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let combined = format!("{}{}", stdout, stderr);
-
-    assert!(
-        combined.to_lowercase().contains("no identities"),
-        "Expected 'no identities', got: {}",
-        combined
-    );
-}
-
-#[test]
-fn test_pre_openssh_10_1_add_identity() {
-    let Some(env) = PreOpenssh101Env::new() else {
-        eprintln!("Skipping test: ssh-agent not available");
-        return;
-    };
-
-    let key_file = env._temp_dir.path().join("id_rsa");
-
-    // Generate a test key
-    let status = Command::new("ssh-keygen")
-        .args(["-t", "rsa", "-b", "1024", "-N", "", "-f"])
-        .arg(&key_file)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .expect("Failed to run ssh-keygen");
-
-    assert!(status.success(), "ssh-keygen failed");
-
-    // Add the key
-    let output = Command::new("ssh-add")
-        .arg(&key_file)
-        .env("SSH_AUTH_SOCK", &env.switcher_socket)
-        .output()
-        .expect("Failed to run ssh-add");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Identity added"),
-        "Expected 'Identity added', got: {}",
-        stderr
-    );
-}
-
-#[test]
-fn test_pre_openssh_10_1_ignore_unknown_files() {
-    let Some(env) = PreOpenssh101Env::new() else {
-        eprintln!("Skipping test: ssh-agent not available");
-        return;
-    };
-
-    let sockets_root = env.sockets_root();
-
-    // Create garbage in the sockets directory
-    fs::write(sockets_root.join("file-unknown"), "").unwrap();
-    fs::create_dir(sockets_root.join("dir-unknown")).unwrap();
-    fs::write(sockets_root.join("ssh-not-a-dir"), "").unwrap();
-    fs::create_dir(sockets_root.join("ssh-empty")).unwrap();
-    fs::create_dir(sockets_root.join("ssh-foo")).unwrap();
-    fs::write(sockets_root.join("ssh-foo/unknown"), "").unwrap();
-    fs::create_dir(sockets_root.join("ssh-bar")).unwrap();
-    fs::write(sockets_root.join("ssh-bar/agent.not-a-socket"), "").unwrap();
-
-    // Run ssh-add to trigger socket discovery
-    let output = Command::new("ssh-add")
-        .arg("-l")
-        .env("SSH_AUTH_SOCK", &env.switcher_socket)
-        .output()
-        .expect("Failed to run ssh-add");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let combined = format!("{}{}", stdout, stderr);
-    assert!(
-        combined.to_lowercase().contains("no identities"),
-        "Expected 'no identities', got: {}",
-        combined
-    );
-
-    // Check log for correct ignore messages
-    let log = fs::read_to_string(&env.log_file).unwrap_or_default();
-
-    assert!(
-        log.contains("file-unknown") && log.contains("not a directory"),
-        "Expected ignore message for file-unknown"
-    );
-    assert!(
-        log.contains("dir-unknown") && log.contains("ssh-"),
-        "Expected ignore message for dir-unknown"
-    );
-    assert!(
-        log.contains("ssh-not-a-dir") && log.contains("not a directory"),
-        "Expected ignore message for ssh-not-a-dir"
-    );
-    assert!(
-        log.contains("ssh-empty") && log.contains("No socket"),
-        "Expected ignore message for ssh-empty"
-    );
-    assert!(
-        log.contains("ssh-foo/unknown") && log.contains("agent"),
-        "Expected ignore message for ssh-foo/unknown"
-    );
-    assert!(
-        log.contains("agent.not-a-socket") && log.contains("Cannot connect"),
-        "Expected ignore message for agent.not-a-socket"
-    );
-}
-
-// =============================================================================
-// integration_openssh_10_1 fixture tests
-// =============================================================================
-
-struct Openssh101Env {
-    _temp_dir: TempDir,
-    _agent_pid: u32,
-    _switcher: SwitcherProcess,
-    switcher_socket: PathBuf,
-    sockets_root: PathBuf,
-    log_file: PathBuf,
-}
-
-impl Openssh101Env {
-    fn new() -> Option<Self> {
-        if !has_ssh_agent() {
-            return None;
-        }
-
-        let temp_dir = TempDir::new().unwrap();
-        let fake_home = temp_dir.path().join("home");
-        fs::create_dir(&fake_home).unwrap();
-
-        // OpenSSH 10.1 style: sockets in ~/.ssh/agent/
-        let sockets_root = fake_home.join(".ssh/agent");
-        fs::create_dir_all(&sockets_root).unwrap();
-
-        // Name sorts last for unknown files test
-        let agent_socket = sockets_root.join("zzz.sshd.aaa");
-
-        // Start real ssh-agent
-        let output = Command::new("ssh-agent")
-            .arg("-a")
-            .arg(&agent_socket)
-            .output()
-            .expect("Failed to start ssh-agent");
-
-        // Parse SSH_AGENT_PID from output (format: "SSH_AGENT_PID=12345; export ...")
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let agent_pid: u32 = stdout
-            .lines()
-            .find(|l| l.starts_with("SSH_AGENT_PID="))
-            .and_then(|l| l.strip_prefix("SSH_AGENT_PID="))
-            .and_then(|s| s.split(';').next())
-            .and_then(|s| s.trim().parse().ok())
-            .expect("Failed to parse SSH_AGENT_PID");
-
-        let switcher_socket = sockets_root.join("switcher");
-        let log_file = temp_dir.path().join("switcher.log");
-
-        let child = Command::new(binary_path())
-            .arg("--socket-path")
-            .arg(&switcher_socket)
-            .arg("--agents-dirs")
-            .arg(format!("/non-existent-1:{}:/non-existent-2", sockets_root.display()))
+            .arg("--target-glob")
+            .arg(&target_glob)
             .env("HOME", &fake_home)
             .env("RUST_LOG", "trace")
             .stderr(fs::File::create(&log_file).unwrap())
@@ -449,15 +217,15 @@ impl Openssh101Env {
     }
 }
 
-impl Drop for Openssh101Env {
+impl Drop for TestEnv {
     fn drop(&mut self) {
         send_signal(self._agent_pid as libc::pid_t, libc::SIGTERM);
     }
 }
 
 #[test]
-fn test_openssh_10_1_list_identities() {
-    let Some(env) = Openssh101Env::new() else {
+fn test_list_identities() {
+    let Some(env) = TestEnv::new() else {
         eprintln!("Skipping test: ssh-agent not available");
         return;
     };
@@ -480,8 +248,8 @@ fn test_openssh_10_1_list_identities() {
 }
 
 #[test]
-fn test_openssh_10_1_add_identity() {
-    let Some(env) = Openssh101Env::new() else {
+fn test_add_identity() {
+    let Some(env) = TestEnv::new() else {
         eprintln!("Skipping test: ssh-agent not available");
         return;
     };
@@ -507,27 +275,22 @@ fn test_openssh_10_1_add_identity() {
         .expect("Failed to run ssh-add");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Identity added"),
-        "Expected 'Identity added', got: {}",
-        stderr
-    );
+    assert!(stderr.contains("Identity added"), "Expected 'Identity added', got: {}", stderr);
 }
 
 #[test]
-fn test_openssh_10_1_ignore_unknown_files() {
-    let Some(env) = Openssh101Env::new() else {
+fn test_ignore_non_sockets() {
+    let Some(env) = TestEnv::new() else {
         eprintln!("Skipping test: ssh-agent not available");
         return;
     };
 
-    // Create garbage in the sockets directory
-    fs::write(env.sockets_root.join("file-unknown"), "").unwrap();
-    fs::create_dir(env.sockets_root.join("dir-unknown")).unwrap();
-    fs::write(env.sockets_root.join("agent.not-a-socket"), "").unwrap();
-    fs::write(env.sockets_root.join("not-a-socket.sshd.foobar"), "").unwrap();
+    // Create non-socket files matching the glob pattern
+    fs::write(env.sockets_root.join("not-a-socket.txt"), "").unwrap();
+    fs::write(env.sockets_root.join("another-file"), "").unwrap();
+    fs::create_dir(env.sockets_root.join("a-directory")).unwrap();
 
-    // Run ssh-add to trigger socket discovery
+    // Run ssh-add to trigger socket discovery — should still find the real agent
     let output = Command::new("ssh-add")
         .arg("-l")
         .env("SSH_AUTH_SOCK", &env.switcher_socket)
@@ -543,24 +306,12 @@ fn test_openssh_10_1_ignore_unknown_files() {
         combined
     );
 
-    // Check log for correct ignore messages
+    // Check log shows that non-socket files were skipped
     let log = fs::read_to_string(&env.log_file).unwrap_or_default();
-
     assert!(
-        log.contains("file-unknown") && log.contains("agent"),
-        "Expected ignore message for file-unknown"
-    );
-    assert!(
-        log.contains("dir-unknown") && log.contains("agent"),
-        "Expected ignore message for dir-unknown"
-    );
-    assert!(
-        log.contains("agent.not-a-socket") && log.contains("Cannot connect"),
-        "Expected ignore message for agent.not-a-socket"
-    );
-    assert!(
-        log.contains("not-a-socket.sshd.foobar") && log.contains("Cannot connect"),
-        "Expected ignore message for not-a-socket.sshd.foobar"
+        log.contains("Cannot connect"),
+        "Expected log messages about failed connections to non-socket files, got: {}",
+        log
     );
 }
 
@@ -590,6 +341,8 @@ fn test_daemonize_xdg_dirs() {
         .arg("--daemon")
         .arg("--socket-path")
         .arg(&socket)
+        .arg("--target-glob")
+        .arg("/nonexistent")
         .env("HOME", &fake_home)
         .env("XDG_STATE_HOME", &state_dir)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
@@ -601,11 +354,7 @@ fn test_daemonize_xdg_dirs() {
     assert!(expected_log.exists(), "Log file should be created at XDG location");
 
     // Read PID and kill daemon
-    let pid: libc::pid_t = fs::read_to_string(&expected_pid)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    let pid: libc::pid_t = fs::read_to_string(&expected_pid).unwrap().trim().parse().unwrap();
 
     send_signal(pid, libc::SIGTERM);
     assert!(
@@ -636,6 +385,8 @@ fn test_daemonize_xdg_runtime_dir_not_set() {
         .arg("--daemon")
         .arg("--socket-path")
         .arg(&socket)
+        .arg("--target-glob")
+        .arg("/nonexistent")
         .env("HOME", &fake_home)
         .env("XDG_STATE_HOME", &state_dir)
         .env_remove("XDG_RUNTIME_DIR")
@@ -650,11 +401,7 @@ fn test_daemonize_xdg_runtime_dir_not_set() {
     assert!(expected_log.exists(), "Log file should be created");
 
     // Read PID and kill daemon
-    let pid: libc::pid_t = fs::read_to_string(&expected_pid)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    let pid: libc::pid_t = fs::read_to_string(&expected_pid).unwrap().trim().parse().unwrap();
 
     send_signal(pid, libc::SIGTERM);
     wait_for_path_gone(&expected_pid, Duration::from_secs(2));
@@ -677,6 +424,8 @@ fn test_daemonize_explicit_files() {
         .arg("--daemon")
         .arg("--socket-path")
         .arg(&socket)
+        .arg("--target-glob")
+        .arg("/nonexistent")
         .arg("--log-file")
         .arg(&log_file)
         .arg("--pid-file")
@@ -690,11 +439,7 @@ fn test_daemonize_explicit_files() {
     assert!(log_file.exists(), "Explicit log file should be created");
 
     // Read PID and kill daemon
-    let pid: libc::pid_t = fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    let pid: libc::pid_t = fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
 
     send_signal(pid, libc::SIGTERM);
     assert!(
@@ -722,6 +467,8 @@ fn test_daemonize_double_start() {
         .arg("--daemon")
         .arg("--socket-path")
         .arg(&socket)
+        .arg("--target-glob")
+        .arg("/nonexistent")
         .arg("--log-file")
         .arg(&log_file)
         .arg("--pid-file")
@@ -740,6 +487,8 @@ fn test_daemonize_double_start() {
         .arg("--daemon")
         .arg("--socket-path")
         .arg(&socket2)
+        .arg("--target-glob")
+        .arg("/nonexistent")
         .arg("--log-file")
         .arg(&log_file)
         .arg("--pid-file")
@@ -748,17 +497,10 @@ fn test_daemonize_double_start() {
         .status();
 
     // Verify second socket was NOT created (the main point of this test)
-    assert!(
-        !socket2.exists(),
-        "Second daemon should not have started - socket2 should not exist"
-    );
+    assert!(!socket2.exists(), "Second daemon should not have started - socket2 should not exist");
 
     // Clean up first daemon
-    let pid: libc::pid_t = fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    let pid: libc::pid_t = fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
 
     send_signal(pid, libc::SIGTERM);
     wait_for_path_gone(&pid_file, Duration::from_secs(2));

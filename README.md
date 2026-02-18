@@ -51,14 +51,20 @@ Extend your login script (typically `~/.login`, `~/.bash_login`, or `~/.zlogin`)
 with the following snippet:
 
 ```sh
-~/.local/bin/ssh-agent-switcher --daemon 2>/dev/null || true
+~/.local/bin/ssh-agent-switcher --daemon \
+    --target-glob "$HOME/.ssh/agent/*" \
+    --target-glob "/tmp/ssh-*/agent.*" \
+    2>/dev/null || true
 export SSH_AUTH_SOCK="/tmp/ssh-agent.${USER}"
 ```
 
 For `fish`, extend `~/.config/fish/config.fish` with the following:
 
 ```sh
-~/.local/bin/ssh-agent-switcher --daemon &>/dev/null || true
+~/.local/bin/ssh-agent-switcher --daemon \
+    --target-glob "$HOME/.ssh/agent/*" \
+    --target-glob "/tmp/ssh-*/agent.*" \
+    &>/dev/null || true
 set -gx SSH_AUTH_SOCK "/tmp/ssh-agent.$USER"
 ```
 

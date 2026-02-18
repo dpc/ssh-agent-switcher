@@ -2,8 +2,8 @@ use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -73,11 +73,7 @@ fn spawn_backend(socket_path: &Path, backend_type: BackendType) -> BackendTask {
         }
     });
 
-    BackendTask {
-        socket_path: socket_path.to_path_buf(),
-        shutdown,
-        _handle: handle,
-    }
+    BackendTask { socket_path: socket_path.to_path_buf(), shutdown, _handle: handle }
 }
 
 fn handle_backend_connection(mut stream: UnixStream, backend_type: BackendType) {
@@ -117,11 +113,7 @@ struct Backend {
 
 impl Backend {
     fn new(socket_path: PathBuf, backend_type: BackendType) -> Self {
-        Self {
-            socket_path,
-            backend_type,
-            task: None,
-        }
+        Self { socket_path, backend_type, task: None }
     }
 
     fn start(&mut self) {
@@ -148,7 +140,7 @@ impl Drop for Backend {
 /// Test environment with two controllable backends.
 struct TestEnv {
     _temp_dir: TempDir,
-    agents_dir: PathBuf,
+    target_glob: String,
     switcher_socket: PathBuf,
     pid_file: PathBuf,
     log_file: PathBuf,
@@ -160,22 +152,16 @@ impl TestEnv {
     fn new() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
-        // Create two agent directory structures.
-        // Using ssh-echo and ssh-always-a as subdirectory names (must start with "ssh-").
-        let echo_dir = temp_dir.path().join("ssh-echo");
-        std::fs::create_dir(&echo_dir).expect("Failed to create echo subdir");
-        let echo_socket = echo_dir.join("agent.echo");
-
-        let always_a_dir = temp_dir.path().join("ssh-always-a");
-        std::fs::create_dir(&always_a_dir).expect("Failed to create always-a subdir");
-        let always_a_socket = always_a_dir.join("agent.always");
+        let echo_socket = temp_dir.path().join("echo.sock");
+        let always_a_socket = temp_dir.path().join("always-a.sock");
 
         let switcher_socket = temp_dir.path().join("switcher.sock");
         let pid_file = temp_dir.path().join("switcher.pid");
         let log_file = temp_dir.path().join("switcher.log");
+        let target_glob = format!("{}/*.sock", temp_dir.path().display());
 
         TestEnv {
-            agents_dir: temp_dir.path().to_path_buf(),
+            target_glob,
             switcher_socket,
             pid_file,
             log_file,
@@ -245,8 +231,8 @@ fn start_switcher(env: &TestEnv, daemon: bool) -> SwitcherProcess {
             .arg("--daemon")
             .arg("--socket-path")
             .arg(&env.switcher_socket)
-            .arg("--agents-dirs")
-            .arg(&env.agents_dir)
+            .arg("--target-glob")
+            .arg(&env.target_glob)
             .arg("--pid-file")
             .arg(&env.pid_file)
             .arg("--log-file")
@@ -263,8 +249,8 @@ fn start_switcher(env: &TestEnv, daemon: bool) -> SwitcherProcess {
         let child = Command::new(binary_path())
             .arg("--socket-path")
             .arg(&env.switcher_socket)
-            .arg("--agents-dirs")
-            .arg(&env.agents_dir)
+            .arg("--target-glob")
+            .arg(&env.target_glob)
             .spawn()
             .expect("Failed to start ssh-agent-switcher");
 
@@ -305,9 +291,7 @@ fn run_switcher_test(daemon: bool) {
 
     // Should now get 'a's back
     let test_data = b"Hello!";
-    let response = env
-        .exchange(test_data)
-        .expect("Failed to exchange with always-a backend");
+    let response = env.exchange(test_data).expect("Failed to exchange with always-a backend");
     assert_eq!(&response, b"aaaaaa", "Always-a backend should return all 'a's");
 
     // Test 3: Start echo backend again (both running), should connect to first found
@@ -317,10 +301,10 @@ fn run_switcher_test(daemon: bool) {
         "Echo socket should appear"
     );
 
-    // The switcher searches directories in sorted order, so ssh-always-a comes before ssh-echo
+    // The switcher searches glob matches in order; always-a.sock sorts before echo.sock
     let test_data = b"Test";
     let response = env.exchange(test_data).expect("Failed to exchange");
-    // Should get 'a's since ssh-always-a is sorted before ssh-echo
+    // Should get 'a's since always-a.sock is sorted before echo.sock
     assert_eq!(&response, b"aaaa", "Should connect to always-a (sorted first)");
 
     // Test 4: Stop always-a, should fall back to echo
@@ -341,10 +325,7 @@ fn run_switcher_test(daemon: bool) {
         "Echo socket should be removed"
     );
 
-    assert!(
-        env.exchange_should_fail(b"No backend"),
-        "Should fail when no backend is available"
-    );
+    assert!(env.exchange_should_fail(b"No backend"), "Should fail when no backend is available");
 
     // Test 6: Restart a backend, should work again
     env.echo_backend.start();
@@ -396,19 +377,18 @@ fn test_communication_patterns() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     // Create a single echo backend
-    let backend_dir = temp_dir.path().join("ssh-backend");
-    std::fs::create_dir(&backend_dir).expect("Failed to create backend dir");
-    let backend_socket = backend_dir.join("agent.test");
+    let backend_socket = temp_dir.path().join("backend.sock");
     let _backend = spawn_backend(&backend_socket, BackendType::Echo);
 
     let switcher_socket = temp_dir.path().join("switcher.sock");
+    let target_glob = format!("{}/*.sock", temp_dir.path().display());
 
     // Start switcher
     let mut child = Command::new(binary_path())
         .arg("--socket-path")
         .arg(&switcher_socket)
-        .arg("--agents-dirs")
-        .arg(temp_dir.path())
+        .arg("--target-glob")
+        .arg(&target_glob)
         .spawn()
         .expect("Failed to start ssh-agent-switcher");
 
@@ -420,12 +400,8 @@ fn test_communication_patterns() {
     // Helper to create a connected stream
     let connect = || {
         let stream = UnixStream::connect(&switcher_socket).expect("Failed to connect");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
         stream
     };
 
@@ -442,9 +418,7 @@ fn test_communication_patterns() {
     for size in [1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256] {
         let mut stream = connect();
         let data: Vec<u8> = (0..size).map(|i| (i & 0xFF) as u8).collect();
-        stream
-            .write_all(&data)
-            .unwrap_or_else(|e| panic!("Failed to write {size} bytes: {e}"));
+        stream.write_all(&data).unwrap_or_else(|e| panic!("Failed to write {size} bytes: {e}"));
         let mut response = vec![0u8; size];
         stream
             .read_exact(&mut response)
@@ -456,9 +430,7 @@ fn test_communication_patterns() {
     for size in [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536] {
         let mut stream = connect();
         let data: Vec<u8> = (0..size).map(|i| (i & 0xFF) as u8).collect();
-        stream
-            .write_all(&data)
-            .unwrap_or_else(|e| panic!("Failed to write {size} bytes: {e}"));
+        stream.write_all(&data).unwrap_or_else(|e| panic!("Failed to write {size} bytes: {e}"));
         let mut response = vec![0u8; size];
         stream
             .read_exact(&mut response)
@@ -486,20 +458,17 @@ fn test_communication_patterns() {
 
         // Write all chunks
         for i in 0..num_chunks {
-            let data: Vec<u8> = (0..chunk_size).map(|j| ((i * chunk_size + j) & 0xFF) as u8).collect();
+            let data: Vec<u8> =
+                (0..chunk_size).map(|j| ((i * chunk_size + j) & 0xFF) as u8).collect();
             stream.write_all(&data).expect("Buffered write failed");
         }
 
         // Read all chunks back
         let mut all_response = vec![0u8; chunk_size * num_chunks];
-        stream
-            .read_exact(&mut all_response)
-            .expect("Buffered read failed");
+        stream.read_exact(&mut all_response).expect("Buffered read failed");
 
         // Verify
-        let expected: Vec<u8> = (0..(chunk_size * num_chunks))
-            .map(|i| (i & 0xFF) as u8)
-            .collect();
+        let expected: Vec<u8> = (0..(chunk_size * num_chunks)).map(|i| (i & 0xFF) as u8).collect();
         assert_eq!(all_response, expected, "Buffered echo failed");
     }
 
@@ -523,9 +492,7 @@ fn test_communication_patterns() {
                 let socket = switcher_socket.clone();
                 thread::spawn(move || {
                     let mut stream = UnixStream::connect(&socket).expect("Failed to connect");
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(5)))
-                        .unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
 
                     for i in 0..20u8 {
                         let data = [conn_id as u8, i, conn_id as u8 ^ i];
@@ -549,4 +516,3 @@ fn test_communication_patterns() {
     }
     child.wait().expect("Failed to wait for child");
 }
-
