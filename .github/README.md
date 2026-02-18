@@ -10,4 +10,4 @@ and Github repo is only a read-only mirror.
 Head to [unix-socket-switcher's Radicle site][project-radicle] for an up to date version and more information.
 
 [radicle]: https://radicle.xyz
-[project-radicle]: https://app.radicle.xyz/nodes/radicle.dpc.pw
+[project-radicle]: https://app.radicle.xyz/nodes/radicle.dpc.pw/rad:zLQPt8d32SDAX4rzqBhrZ9pNC9Wc

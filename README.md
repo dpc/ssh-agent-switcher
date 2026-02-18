@@ -22,7 +22,7 @@ Head to [the project's Radicle site][project-radicle] for an up to date version
 and more information.
 
 [radicle]: https://radicle.xyz
-[project-radicle]: https://app.radicle.xyz/nodes/radicle.dpc.pw
+[project-radicle]: https://app.radicle.xyz/nodes/radicle.dpc.pw/rad:zLQPt8d32SDAX4rzqBhrZ9pNC9Wc
 
 ## Major changes from the original
 
