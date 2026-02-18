@@ -105,11 +105,13 @@ You should always use this flag.
 .It Fl -help
 Show interactive help on stdout and exit.
 .It Fl -log-file Ar path
-Specifies the location of the log file to create or to append to when running
+Specifies the location of a log file to create or to append to when running
 in daemon mode.
+If not set, logs are written to stderr (lost in daemon mode).
 .It Fl -pid-file Ar path
 Specifies the location of the PID file to create when running in daemon mode.
 This is used as a lock to determine if the daemon should start again or not.
+If not set, no PID file is created and double-start prevention is disabled.
 .It Fl -socket-path Ar path
 Location where to create the listening socket.
 Required unless using systemd socket activation.
@@ -148,25 +150,6 @@ Possible values are:
 and
 .Sq trace
 in order of verbosity.
-.It Va XDG_STATE_HOME
-Path to where to store program-specific state files (the daemon log in the common
-case, but also the daemon PID if
-.Va XDG_RUNTIME_DIR
-is not defined).
-.It Va XDG_RUNTIME_DIR
-Path to where to store program-specific runtime files (the PID file).
-.El
-.Sh FILES
-.Bl -tag -width XXXX
-.It Pa ${XDG_RUNTIME_DIR}/unix-socket-switcher.pid
-Default PID file when running in daemon mode.
-Falls back to
-.Pa ${XDG_STATE_HOME}/unix-socket-switcher.pid
-if
-.Va XDG_RUNTIME_DIR
-is not set.
-.It Pa ${XDG_STATE_HOME}/unix-socket-switcher.log
-Default log file when running in daemon mode.
 .El
 .Sh SEE ALSO
 .Xr ssh-agent 1

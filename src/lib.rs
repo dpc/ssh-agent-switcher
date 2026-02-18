@@ -111,12 +111,13 @@ fn handle_connection(client: UnixStream, target_globs: Arc<[String]>) {
 /// This serves the listening socket using the provided `listener` and looks for
 /// target sockets matching `target_globs`.
 ///
-/// The `pid_file` is needed for cleanup purposes. If `systemd_activated` is
-/// true, the socket file will not be removed on exit (systemd owns it).
+/// If `pid_file` is provided, it will be cleaned up on exit. If
+/// `systemd_activated` is true, the socket file will not be removed on exit
+/// (systemd owns it).
 pub fn run(
     listener: UnixListener,
     target_globs: &[String],
-    pid_file: PathBuf,
+    pid_file: Option<PathBuf>,
     systemd_activated: bool,
 ) -> Result<()> {
     let socket_path = listener
@@ -190,7 +191,9 @@ pub fn run(
     }
     // Because we catch signals, daemonize doesn't properly clean up the PID file so
     // we have to do it ourselves.
-    let _ = fs::remove_file(&pid_file);
+    if let Some(ref pid_file) = pid_file {
+        let _ = fs::remove_file(pid_file);
+    }
 
     Ok(())
 }

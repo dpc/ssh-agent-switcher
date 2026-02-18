@@ -3,7 +3,6 @@
 //! Some tests require `ssh-agent` and `ssh-add` to be available for the SSH
 //! agent tests.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -298,108 +297,6 @@ fn test_ignore_non_sockets() {
 // =============================================================================
 // daemonize fixture tests
 // =============================================================================
-
-#[test]
-fn test_daemonize_xdg_dirs() {
-    let temp_dir = TempDir::new().unwrap();
-    let fake_home = temp_dir.path().join("home");
-    fs::create_dir(&fake_home).unwrap();
-
-    let state_dir = temp_dir.path().join("state");
-    let runtime_dir = temp_dir.path().join("runtime");
-    fs::create_dir(&runtime_dir).unwrap();
-    fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).unwrap();
-
-    let sockets_root = temp_dir.path().join("sockets");
-    fs::create_dir(&sockets_root).unwrap();
-
-    let socket = sockets_root.join("socket");
-    let expected_log = state_dir.join("unix-socket-switcher.log");
-    let expected_pid = runtime_dir.join("unix-socket-switcher.pid");
-
-    let status = Command::new(binary_path())
-        .arg("--daemon")
-        .arg("--socket-path")
-        .arg(&socket)
-        .arg("--target-glob")
-        .arg("/nonexistent")
-        .env("HOME", &fake_home)
-        .env("XDG_STATE_HOME", &state_dir)
-        .env("XDG_RUNTIME_DIR", &runtime_dir)
-        .status()
-        .expect("Failed to start unix-socket-switcher");
-
-    assert!(status.success(), "Daemon parent should exit successfully");
-    assert!(
-        expected_pid.exists(),
-        "PID file should be created at XDG location"
-    );
-    assert!(
-        expected_log.exists(),
-        "Log file should be created at XDG location"
-    );
-
-    // Read PID and kill daemon
-    let pid: libc::pid_t = fs::read_to_string(&expected_pid)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-
-    send_signal(pid, libc::SIGTERM);
-    assert!(
-        wait_for_path_gone(&expected_pid, Duration::from_secs(2)),
-        "PID file should be removed on shutdown"
-    );
-}
-
-#[test]
-fn test_daemonize_xdg_runtime_dir_not_set() {
-    let temp_dir = TempDir::new().unwrap();
-    let fake_home = temp_dir.path().join("home");
-    fs::create_dir(&fake_home).unwrap();
-
-    let state_dir = temp_dir.path().join("state");
-    fs::create_dir(&state_dir).unwrap();
-    fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700)).unwrap();
-
-    let sockets_root = temp_dir.path().join("sockets");
-    fs::create_dir(&sockets_root).unwrap();
-
-    let socket = sockets_root.join("socket");
-    let expected_log = state_dir.join("unix-socket-switcher.log");
-    // When XDG_RUNTIME_DIR is not set, PID file falls back to state dir
-    let expected_pid = state_dir.join("unix-socket-switcher.pid");
-
-    let status = Command::new(binary_path())
-        .arg("--daemon")
-        .arg("--socket-path")
-        .arg(&socket)
-        .arg("--target-glob")
-        .arg("/nonexistent")
-        .env("HOME", &fake_home)
-        .env("XDG_STATE_HOME", &state_dir)
-        .env_remove("XDG_RUNTIME_DIR")
-        .status()
-        .expect("Failed to start unix-socket-switcher");
-
-    assert!(status.success(), "Daemon parent should exit successfully");
-    assert!(
-        expected_pid.exists(),
-        "PID file should fall back to state dir when XDG_RUNTIME_DIR not set"
-    );
-    assert!(expected_log.exists(), "Log file should be created");
-
-    // Read PID and kill daemon
-    let pid: libc::pid_t = fs::read_to_string(&expected_pid)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-
-    send_signal(pid, libc::SIGTERM);
-    wait_for_path_gone(&expected_pid, Duration::from_secs(2));
-}
 
 #[test]
 fn test_daemonize_explicit_files() {

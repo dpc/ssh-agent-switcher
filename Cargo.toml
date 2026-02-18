@@ -18,7 +18,6 @@ libc = "0.2"
 listenfd = "1"
 log = "0.4"
 signal-hook = "0.3"
-xdg = "3.0"
 
 [dependencies.getoptsargs]
 version = "0.1"
