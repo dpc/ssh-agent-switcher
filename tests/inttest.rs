@@ -1,13 +1,14 @@
 //! Integration tests translated from inttest.sh
 //!
-//! Some tests require `ssh-agent` and `ssh-add` to be available for the SSH agent tests.
+//! Some tests require `ssh-agent` and `ssh-add` to be available for the SSH
+//! agent tests.
 
-use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::thread;
 use std::time::Duration;
+use std::{fs, thread};
+
 use tempfile::TempDir;
 
 fn binary_path() -> PathBuf {
@@ -478,8 +479,8 @@ fn test_daemonize_double_start() {
 
     // Try to start second daemon with same PID file but different socket
     // The child will detect the lock and exit, but the parent may timeout waiting
-    // for socket2 (which will never be created). We don't care about the exit status,
-    // only that socket2 is never created.
+    // for socket2 (which will never be created). We don't care about the exit
+    // status, only that socket2 is never created.
     let _ = Command::new(binary_path())
         .arg("--daemon")
         .arg("--socket-path")

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
 use tempfile::TempDir;
 
 /// Get the path to the built binary.
@@ -85,7 +86,8 @@ fn test_systemd_activation() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let socket_path = temp_dir.path().join("systemd.sock");
 
-    // Put backend socket in a separate backends/ subdir to avoid matching the systemd socket
+    // Put backend socket in a separate backends/ subdir to avoid matching the
+    // systemd socket
     let backends_dir = temp_dir.path().join("backends");
     fs::create_dir(&backends_dir).expect("Failed to create backends dir");
 

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
 use tempfile::TempDir;
 
 /// Wait for a file/socket to appear, with timeout.
@@ -193,7 +194,8 @@ impl TestEnv {
         Ok(response)
     }
 
-    /// Try to connect and exchange data, expecting failure (no backend available).
+    /// Try to connect and exchange data, expecting failure (no backend
+    /// available).
     fn exchange_should_fail(&self, data: &[u8]) -> bool {
         let stream = match UnixStream::connect(&self.switcher_socket) {
             Ok(s) => s,
@@ -321,14 +323,16 @@ fn run_switcher_test(daemon: bool) {
         "Always-a backend should return all 'a's"
     );
 
-    // Test 3: Start echo backend again (both running), should connect to first found
+    // Test 3: Start echo backend again (both running), should connect to first
+    // found
     env.echo_backend.start();
     assert!(
         wait_for_path(&env.echo_backend.socket_path, Duration::from_secs(2)),
         "Echo socket should appear"
     );
 
-    // The switcher searches glob matches in order; always-a.sock sorts before echo.sock
+    // The switcher searches glob matches in order; always-a.sock sorts before
+    // echo.sock
     let test_data = b"Test";
     let response = env.exchange(test_data).expect("Failed to exchange");
     // Should get 'a's since always-a.sock is sorted before echo.sock
