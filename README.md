@@ -28,7 +28,6 @@ and more information.
 
 Note: The list might become outdated.
 
-- **Blocking-IO**: Refactored not to require async Rust (tokio) for smaller memory usage.
 - **Glob-based discovery**: Replaced OpenSSH-specific directory scanning with
   flexible `--target-glob` patterns.
 - **General-purpose**: No longer hardcodes SSH agent naming conventions or

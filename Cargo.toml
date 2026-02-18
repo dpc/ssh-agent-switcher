@@ -17,11 +17,14 @@ glob = "0.3"
 libc = "0.2"
 listenfd = "1"
 log = "0.4"
-signal-hook = "0.3"
 
 [dependencies.getoptsargs]
 version = "0.1"
 features = ["env_logger"]
+
+[dependencies.tokio]
+version = "1"
+features = ["io-util", "macros", "net", "rt-multi-thread", "signal"]
 
 [dev-dependencies]
 tempfile = "3"

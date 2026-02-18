@@ -27,16 +27,15 @@
 
 //! Utilities to find a target Unix socket matching glob patterns.
 
-use std::os::unix::net::UnixStream;
-
 use log::{debug, info, trace};
+use tokio::net::UnixStream;
 
 /// Expands the given glob patterns and attempts to connect to the first
 /// matching Unix socket.
 ///
 /// Returns the first successful connection, or `None` if no matching socket
 /// could be connected.
-pub(super) fn find_socket(target_globs: &[String]) -> Option<UnixStream> {
+pub(super) async fn find_socket(target_globs: &[String]) -> Option<UnixStream> {
     for pattern in target_globs {
         let paths = match glob::glob(pattern) {
             Ok(paths) => paths,
@@ -55,7 +54,7 @@ pub(super) fn find_socket(target_globs: &[String]) -> Option<UnixStream> {
                 }
             };
 
-            match UnixStream::connect(&path) {
+            match UnixStream::connect(&path).await {
                 Ok(stream) => {
                     info!("Successfully connected to {}", path.display());
                     return Some(stream);

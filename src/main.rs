@@ -116,10 +116,21 @@ fn daemon_child(
     pid_file: Option<PathBuf>,
     systemd_activated: bool,
 ) -> Result<i32> {
-    if let Err(e) = unix_socket_switcher::run(listener, target_globs, pid_file, systemd_activated) {
-        bail!("{}", e);
-    }
-    Ok(0)
+    // Block shutdown signals before creating the runtime so an early SIGTERM
+    // doesn't kill the process.  They are unblocked inside run() after async
+    // signal handlers are registered.
+    unix_socket_switcher::block_shutdown_signals();
+
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|e| anyhow!("Failed to start runtime: {}", e))?;
+    runtime.block_on(async {
+        if let Err(e) =
+            unix_socket_switcher::run(listener, target_globs, pid_file, systemd_activated).await
+        {
+            bail!("{}", e);
+        }
+        Ok(0)
+    })
 }
 
 fn app_main(matches: Matches) -> Result<i32> {

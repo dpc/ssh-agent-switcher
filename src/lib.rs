@@ -28,16 +28,15 @@
 //! Serves a Unix domain socket that proxies connections to a target Unix socket
 //! found via glob patterns.
 
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use std::{fs, io, thread};
+use std::{fs, io};
 
 use log::{debug, info, warn};
-use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
-use signal_hook::iterator::Signals;
+use tokio::net::{UnixListener as TokioUnixListener, UnixStream};
+use tokio::signal::unix::{SignalKind, signal};
 
 mod find;
 
@@ -62,6 +61,23 @@ fn set_umask(umask: libc::mode_t) -> UmaskGuard {
     }
 }
 
+/// Blocks shutdown signals (SIGINT, SIGQUIT, SIGTERM) so they don't kill the
+/// process with the default handler before async signal handlers are
+/// registered.
+///
+/// Must be called before starting the tokio runtime. Signals are unblocked
+/// inside [`run`] after the async handlers are set up.
+pub fn block_shutdown_signals() {
+    unsafe {
+        let mut mask: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut mask);
+        libc::sigaddset(&mut mask, libc::SIGINT);
+        libc::sigaddset(&mut mask, libc::SIGQUIT);
+        libc::sigaddset(&mut mask, libc::SIGTERM);
+        libc::sigprocmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
+    }
+}
+
 /// Creates the agent socket to listen on.
 ///
 /// This makes sure that the socket is only accessible by the current user.
@@ -74,36 +90,20 @@ pub fn create_listener(socket_path: &Path) -> Result<UnixListener> {
         .map_err(|e| format!("Cannot listen on {}: {}", socket_path.display(), e))
 }
 
-/// Copies data bidirectionally between two streams until one side closes.
-fn handle_bi_socket_forwarding(client: UnixStream, agent: UnixStream) -> io::Result<()> {
-    let mut client_read = client;
-    let mut agent_read = agent;
-    let mut client_write = client_read.try_clone()?;
-    let mut agent_write = agent_read.try_clone()?;
-
-    let t1 = thread::spawn(move || io::copy(&mut client_read, &mut agent_write));
-    let t2 = thread::spawn(move || io::copy(&mut agent_read, &mut client_write));
-
-    // Wait for either direction to finish (one side closed)
-    let r1 = t1.join().map_err(|_| io::Error::other("thread panicked"))?;
-    let r2 = t2.join().map_err(|_| io::Error::other("thread panicked"))?;
-
-    r1.and(r2).map(|_| ())
-}
-
 /// Handles one incoming connection on `client`.
-fn handle_connection(client: UnixStream, target_globs: Arc<[String]>) {
-    let agent = match find::find_socket(&target_globs) {
+async fn handle_connection(mut client: UnixStream, target_globs: &[String]) -> Result<()> {
+    let mut agent = match find::find_socket(target_globs).await {
         Some(socket) => socket,
         None => {
-            warn!("Dropping connection: no target socket found");
-            return;
+            return Err("No target socket found; cannot proxy request".to_owned());
         }
     };
-    if let Err(e) = handle_bi_socket_forwarding(client, agent) {
-        warn!("Connection error: {}", e);
-    }
+    let result = tokio::io::copy_bidirectional(&mut client, &mut agent)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("{}", e));
     debug!("Closing client connection");
+    result
 }
 
 /// Runs the core logic of the app.
@@ -114,7 +114,7 @@ fn handle_connection(client: UnixStream, target_globs: Arc<[String]>) {
 /// If `pid_file` is provided, it will be cleaned up on exit. If
 /// `systemd_activated` is true, the socket file will not be removed on exit
 /// (systemd owns it).
-pub fn run(
+pub async fn run(
     listener: UnixListener,
     target_globs: &[String],
     pid_file: Option<PathBuf>,
@@ -126,69 +126,75 @@ pub fn run(
         .and_then(|addr| addr.as_pathname().map(|p| p.to_path_buf()))
         .ok_or_else(|| "Cannot determine socket path from listener".to_string())?;
 
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("Failed to set listener non-blocking: {}", e))?;
+    let listener = TokioUnixListener::from_std(listener)
+        .map_err(|e| format!("Failed to create tokio listener: {}", e))?;
+
+    let mut sighup = signal(SignalKind::hangup())
+        .map_err(|e| format!("Failed to install SIGHUP handler: {}", e))?;
+    let mut sigint = signal(SignalKind::interrupt())
+        .map_err(|e| format!("Failed to install SIGINT handler: {}", e))?;
+    let mut sigquit = signal(SignalKind::quit())
+        .map_err(|e| format!("Failed to install SIGQUIT handler: {}", e))?;
+    let mut sigterm = signal(SignalKind::terminate())
+        .map_err(|e| format!("Failed to install SIGTERM handler: {}", e))?;
+
+    // Unblock signals now that tokio handlers are registered.
+    // Any pending signals are delivered to the handlers immediately.
+    unsafe {
+        let mut mask: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut mask);
+        libc::sigaddset(&mut mask, libc::SIGINT);
+        libc::sigaddset(&mut mask, libc::SIGQUIT);
+        libc::sigaddset(&mut mask, libc::SIGTERM);
+        libc::sigprocmask(libc::SIG_UNBLOCK, &mask, std::ptr::null_mut());
+    }
+
     let target_globs: Arc<[String]> = target_globs.into();
 
-    // Set up signal handling with the atomic flag + reconnect pattern
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_clone = Arc::clone(&shutdown);
-    let socket_path_clone = socket_path.clone();
-
-    let mut signals = Signals::new([SIGHUP, SIGINT, SIGQUIT, SIGTERM])
-        .map_err(|e| format!("Failed to install signal handlers: {}", e))?;
-
-    thread::spawn(move || {
-        for sig in signals.forever() {
-            match sig {
-                SIGHUP => {
-                    // Reload - currently a no-op
-                }
-                SIGINT | SIGQUIT | SIGTERM => {
-                    shutdown_clone.store(true, Ordering::SeqCst);
-                    // Connect to our own socket to wake up the accept() call
-                    let _ = UnixStream::connect(&socket_path_clone);
-                    break;
-                }
-                _ => {}
-            }
-        }
-    });
-
     debug!("Entering main loop");
-    loop {
-        match listener.accept() {
-            Ok((socket, _addr)) => {
-                if shutdown.load(Ordering::SeqCst) {
-                    if systemd_activated {
-                        info!("Shutting down (systemd owns {})", socket_path.display());
-                    } else {
-                        info!("Shutting down and removing {}", socket_path.display());
-                    }
-                    break;
+    let mut stop = None;
+    while stop.is_none() {
+        tokio::select! {
+            result = listener.accept() => match result {
+                Ok((socket, _addr)) => {
+                    debug!("Connection accepted");
+                    let globs = Arc::clone(&target_globs);
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_connection(socket, &globs).await {
+                            warn!("Dropping connection due to error: {}", e);
+                        }
+                    });
                 }
+                Err(e) => warn!("Failed to accept connection: {}", e),
+            },
 
-                debug!("Connection accepted");
-                let target_globs = Arc::clone(&target_globs);
-                thread::spawn(move || handle_connection(socket, target_globs));
-            }
-            Err(e) => {
-                if shutdown.load(Ordering::SeqCst) {
-                    if systemd_activated {
-                        info!("Shutting down (systemd owns {})", socket_path.display());
-                    } else {
-                        info!("Shutting down and removing {}", socket_path.display());
-                    }
-                    break;
-                }
-                warn!("Failed to accept connection: {}", e);
-            }
+            _ = sighup.recv() => (),
+            _ = sigint.recv() => stop = Some("SIGINT"),
+            _ = sigquit.recv() => stop = Some("SIGQUIT"),
+            _ = sigterm.recv() => stop = Some("SIGTERM"),
         }
     }
     debug!("Main loop exited");
 
-    // Don't remove socket if systemd owns it
-    if !systemd_activated {
+    let stop = stop.expect("Loop can only exit by setting stop");
+    if systemd_activated {
+        info!(
+            "Shutting down due to {} (systemd owns {})",
+            stop,
+            socket_path.display()
+        );
+    } else {
+        info!(
+            "Shutting down due to {} and removing {}",
+            stop,
+            socket_path.display()
+        );
         let _ = fs::remove_file(&socket_path);
     }
+
     // Because we catch signals, daemonize doesn't properly clean up the PID file so
     // we have to do it ourselves.
     if let Some(ref pid_file) = pid_file {
