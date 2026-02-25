@@ -36,7 +36,7 @@ use std::time::Duration;
 use daemonize::{Daemonize, Outcome};
 use getoptsargs::prelude::*;
 use listenfd::ListenFd;
-use log::info;
+use log::{debug, info};
 
 /// Maximum amount of time to wait for the child process to start when
 /// daemonization is enabled.
@@ -138,7 +138,12 @@ fn app_main(matches: Matches) -> Result<i32> {
     let log_file = get_log_file(&matches);
     let pid_file = get_pid_file(&matches);
 
-    // Check for systemd socket activation first
+    // Save socket activation env vars for diagnostics (ListenFd::from_env() clears
+    // them).
+    let listen_fds_env = std::env::var("LISTEN_FDS").ok();
+    let listen_pid_env = std::env::var("LISTEN_PID").ok();
+
+    // Check for systemd socket activation first, fall back to --socket-path.
     let mut listenfd = ListenFd::from_env();
     let (listener, systemd_activated) = if let Some(listener) = listenfd.take_unix_listener(0)? {
         if matches.opt_present("socket-path") {
@@ -149,6 +154,16 @@ fn app_main(matches: Matches) -> Result<i32> {
     } else {
         // No systemd socket, create our own
         let socket_path = get_socket_path(&matches)?;
+        // Remove any leftover socket file from a previous instance so bind() succeeds.
+        if let Err(e) = fs::remove_file(&socket_path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            bail!(
+                "Failed to remove stale socket {}: {}",
+                socket_path.display(),
+                e
+            );
+        }
         let listener =
             unix_socket_switcher::create_listener(&socket_path).map_err(|e| anyhow!("{}", e))?;
         (listener, false)
@@ -206,6 +221,12 @@ fn app_main(matches: Matches) -> Result<i32> {
         }
     } else {
         init_env_logger(&matches.program_name);
+        debug!(
+            "Socket activation env: LISTEN_FDS={:?}, LISTEN_PID={:?}, pid={}",
+            listen_fds_env,
+            listen_pid_env,
+            std::process::id()
+        );
         daemon_child(listener, &target_globs, pid_file, systemd_activated)
     }
 }
