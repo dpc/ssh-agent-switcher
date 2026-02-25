@@ -31,12 +31,40 @@
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use std::{fs, io};
 
 use log::{debug, info, warn};
 use tokio::net::{UnixListener as TokioUnixListener, UnixStream};
 use tokio::signal::unix::{SignalKind, signal};
+
+/// Tracks the number of active proxy connections.
+struct ActiveConnections(Arc<AtomicUsize>);
+
+/// RAII guard that decrements the active connection count on drop.
+struct ConnectionGuard(Arc<AtomicUsize>);
+
+impl ActiveConnections {
+    fn new() -> Self {
+        Self(Arc::new(AtomicUsize::new(0)))
+    }
+
+    fn guard(&self) -> ConnectionGuard {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        ConnectionGuard(Arc::clone(&self.0))
+    }
+
+    fn count(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 mod find;
 
@@ -113,12 +141,14 @@ async fn handle_connection(mut client: UnixStream, target_globs: &[String]) -> R
 ///
 /// If `pid_file` is provided, it will be cleaned up on exit. If
 /// `systemd_activated` is true, the socket file will not be removed on exit
-/// (systemd owns it).
+/// (systemd owns it). If `idle_timeout` is provided, the process exits after
+/// being idle (no active connections) for that duration.
 pub async fn run(
     listener: UnixListener,
     target_globs: &[String],
     pid_file: Option<PathBuf>,
     systemd_activated: bool,
+    idle_timeout: Option<Duration>,
 ) -> Result<()> {
     let socket_path = listener
         .local_addr()
@@ -153,6 +183,10 @@ pub async fn run(
     }
 
     let target_globs: Arc<[String]> = target_globs.into();
+    let active_connections = ActiveConnections::new();
+
+    let idle_sleep = tokio::time::sleep(idle_timeout.unwrap_or(Duration::MAX));
+    tokio::pin!(idle_sleep);
 
     debug!("Entering main loop");
     let mut stop = None;
@@ -161,14 +195,28 @@ pub async fn run(
             result = listener.accept() => match result {
                 Ok((socket, _addr)) => {
                     debug!("Connection accepted");
+                    let guard = active_connections.guard();
                     let globs = Arc::clone(&target_globs);
                     tokio::spawn(async move {
+                        let _guard = guard;
                         if let Err(e) = handle_connection(socket, &globs).await {
                             warn!("Dropping connection due to error: {}", e);
                         }
                     });
+                    if let Some(timeout) = idle_timeout {
+                        idle_sleep.as_mut().reset(tokio::time::Instant::now() + timeout);
+                    }
                 }
                 Err(e) => warn!("Failed to accept connection: {}", e),
+            },
+
+            () = &mut idle_sleep, if idle_timeout.is_some() => {
+                if active_connections.count() == 0 {
+                    stop = Some("idle timeout");
+                } else {
+                    debug!("Idle timer fired but {} connections still active", active_connections.count());
+                    idle_sleep.as_mut().reset(tokio::time::Instant::now() + idle_timeout.unwrap());
+                }
             },
 
             _ = sighup.recv() => (),

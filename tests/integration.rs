@@ -583,3 +583,133 @@ fn test_communication_patterns() {
     }
     child.wait().expect("Failed to wait for child");
 }
+
+/// Helper: start switcher with --idle-timeout and return the child process.
+fn start_switcher_with_idle_timeout(env: &TestEnv, idle_timeout_secs: u64) -> Child {
+    Command::new(binary_path())
+        .arg("--socket-path")
+        .arg(&env.switcher_socket)
+        .arg("--target-glob")
+        .arg(&env.target_glob)
+        .arg("--idle-timeout")
+        .arg(idle_timeout_secs.to_string())
+        .spawn()
+        .expect("Failed to start unix-socket-switcher")
+}
+
+/// Wait for a child process to exit, with timeout. Returns true if it exited.
+fn wait_for_exit(child: &mut Child, timeout: Duration) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+#[test]
+fn test_idle_timeout_exits_when_idle() {
+    let mut env = TestEnv::new();
+    env.echo_backend.start();
+
+    let mut child = start_switcher_with_idle_timeout(&env, 1);
+
+    assert!(
+        wait_for_path(&env.switcher_socket, Duration::from_secs(5)),
+        "Switcher socket was not created in time"
+    );
+
+    // Don't connect — just wait for the idle timeout to fire
+    assert!(
+        wait_for_exit(&mut child, Duration::from_secs(5)),
+        "Process should have exited due to idle timeout"
+    );
+
+    let status = child.wait().expect("Failed to wait for child");
+    assert!(status.success(), "Process should exit with status 0");
+}
+
+#[test]
+fn test_idle_timeout_waits_for_active_connections() {
+    let mut env = TestEnv::new();
+    env.echo_backend.start();
+
+    let mut child = start_switcher_with_idle_timeout(&env, 1);
+
+    assert!(
+        wait_for_path(&env.switcher_socket, Duration::from_secs(5)),
+        "Switcher socket was not created in time"
+    );
+
+    // Hold a connection open past the idle timeout
+    let conn = UnixStream::connect(&env.switcher_socket).expect("Failed to connect");
+
+    // Wait longer than the idle timeout
+    thread::sleep(Duration::from_millis(1500));
+
+    // Process should still be running because a connection is active
+    assert!(
+        child.try_wait().expect("try_wait failed").is_none(),
+        "Process should still be running with an active connection"
+    );
+
+    // Drop the connection
+    drop(conn);
+
+    // Now it should exit after the idle timeout fires again
+    assert!(
+        wait_for_exit(&mut child, Duration::from_secs(5)),
+        "Process should exit after connection closes"
+    );
+
+    let status = child.wait().expect("Failed to wait for child");
+    assert!(status.success(), "Process should exit with status 0");
+}
+
+#[test]
+fn test_idle_timeout_resets_on_connection() {
+    let mut env = TestEnv::new();
+    env.echo_backend.start();
+
+    let mut child = start_switcher_with_idle_timeout(&env, 2);
+
+    assert!(
+        wait_for_path(&env.switcher_socket, Duration::from_secs(5)),
+        "Switcher socket was not created in time"
+    );
+
+    // Wait 1.5s (not enough for the 2s timeout)
+    thread::sleep(Duration::from_millis(1500));
+
+    // Make a quick connection to reset the timer
+    {
+        let mut stream = UnixStream::connect(&env.switcher_socket).expect("Failed to connect");
+        stream.write_all(b"ping").expect("Failed to write");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf).expect("Failed to read");
+    }
+
+    // Wait another 1.5s — 3s total from start, but only 1.5s from last activity
+    thread::sleep(Duration::from_millis(1500));
+
+    // Should still be running (timer was reset by the connection)
+    assert!(
+        child.try_wait().expect("try_wait failed").is_none(),
+        "Process should still be running because idle timer was reset"
+    );
+
+    // Now wait for the remaining timeout to expire
+    assert!(
+        wait_for_exit(&mut child, Duration::from_secs(5)),
+        "Process should eventually exit after idle timeout"
+    );
+
+    let status = child.wait().expect("Failed to wait for child");
+    assert!(status.success(), "Process should exit with status 0");
+}

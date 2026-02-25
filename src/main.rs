@@ -69,6 +69,22 @@ fn get_socket_path(matches: &Matches) -> Result<PathBuf> {
     }
 }
 
+/// Gets the value of the `--idle-timeout` flag, if specified.
+fn get_idle_timeout(matches: &Matches) -> Result<Option<Duration>> {
+    match matches.opt_str("idle-timeout") {
+        Some(s) => {
+            let secs: u64 = s
+                .parse()
+                .map_err(|_| anyhow!("--idle-timeout must be a positive integer (seconds)"))?;
+            if secs == 0 {
+                bail!("--idle-timeout must be a positive integer (seconds)");
+            }
+            Ok(Some(Duration::from_secs(secs)))
+        }
+        None => Ok(None),
+    }
+}
+
 fn app_setup(builder: Builder) -> Builder {
     builder
         .bugs("https://github.com/dpc/unix-socket-switcher/issues/")
@@ -95,6 +111,12 @@ fn app_setup(builder: Builder) -> Builder {
             "path to the socket to listen on (required unless using systemd activation)",
             "path",
         )
+        .optopt(
+            "",
+            "idle-timeout",
+            "exit after being idle for this many seconds (useful with systemd activation)",
+            "SECONDS",
+        )
 }
 
 fn daemon_parent(log_file: Option<&Path>, pid_file: Option<&Path>) -> Result<i32> {
@@ -115,6 +137,7 @@ fn daemon_child(
     target_globs: &[String],
     pid_file: Option<PathBuf>,
     systemd_activated: bool,
+    idle_timeout: Option<Duration>,
 ) -> Result<i32> {
     // Block shutdown signals before creating the runtime so an early SIGTERM
     // doesn't kill the process.  They are unblocked inside run() after async
@@ -124,8 +147,14 @@ fn daemon_child(
     let runtime =
         tokio::runtime::Runtime::new().map_err(|e| anyhow!("Failed to start runtime: {}", e))?;
     runtime.block_on(async {
-        if let Err(e) =
-            unix_socket_switcher::run(listener, target_globs, pid_file, systemd_activated).await
+        if let Err(e) = unix_socket_switcher::run(
+            listener,
+            target_globs,
+            pid_file,
+            systemd_activated,
+            idle_timeout,
+        )
+        .await
         {
             bail!("{}", e);
         }
@@ -137,6 +166,7 @@ fn app_main(matches: Matches) -> Result<i32> {
     let target_globs = get_target_globs(&matches)?;
     let log_file = get_log_file(&matches);
     let pid_file = get_pid_file(&matches);
+    let idle_timeout = get_idle_timeout(&matches)?;
 
     // Save socket activation env vars for diagnostics (ListenFd::from_env() clears
     // them).
@@ -205,7 +235,13 @@ fn app_main(matches: Matches) -> Result<i32> {
             }
             Outcome::Child(Ok(_child)) => {
                 init_env_logger(&matches.program_name);
-                daemon_child(listener, &target_globs, pid_file, systemd_activated)
+                daemon_child(
+                    listener,
+                    &target_globs,
+                    pid_file,
+                    systemd_activated,
+                    idle_timeout,
+                )
             }
             Outcome::Child(Err(e)) => {
                 let msg = e.to_string();
@@ -227,7 +263,13 @@ fn app_main(matches: Matches) -> Result<i32> {
             listen_pid_env,
             std::process::id()
         );
-        daemon_child(listener, &target_globs, pid_file, systemd_activated)
+        daemon_child(
+            listener,
+            &target_globs,
+            pid_file,
+            systemd_activated,
+            idle_timeout,
+        )
     }
 }
 
