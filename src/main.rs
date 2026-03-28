@@ -89,9 +89,9 @@ fn get_idle_timeout(matches: &Matches) -> Result<Option<Duration>> {
 fn get_connect_timeout(matches: &Matches) -> Result<Option<Duration>> {
     match matches.opt_str("connect-timeout") {
         Some(s) => {
-            let ms: u64 = s
-                .parse()
-                .map_err(|_| anyhow!("--connect-timeout must be a positive integer (milliseconds)"))?;
+            let ms: u64 = s.parse().map_err(|_| {
+                anyhow!("--connect-timeout must be a positive integer (milliseconds)")
+            })?;
             if ms == 0 {
                 bail!("--connect-timeout must be a positive integer (milliseconds)");
             }
@@ -139,6 +139,11 @@ fn app_setup(builder: Builder) -> Builder {
             "timeout in milliseconds for each target socket connection attempt",
             "MS",
         )
+        .optflag(
+            "",
+            "connect-newest",
+            "try target sockets newest first (by filesystem modification time)",
+        )
 }
 
 fn daemon_parent(log_file: Option<&Path>, pid_file: Option<&Path>) -> Result<i32> {
@@ -161,6 +166,7 @@ fn daemon_child(
     systemd_activated: bool,
     idle_timeout: Option<Duration>,
     connect_timeout: Option<Duration>,
+    connect_newest: bool,
 ) -> Result<i32> {
     // Block shutdown signals before creating the runtime so an early SIGTERM
     // doesn't kill the process.  They are unblocked inside run() after async
@@ -177,6 +183,7 @@ fn daemon_child(
             systemd_activated,
             idle_timeout,
             connect_timeout,
+            connect_newest,
         )
         .await
         {
@@ -192,6 +199,7 @@ fn app_main(matches: Matches) -> Result<i32> {
     let pid_file = get_pid_file(&matches);
     let idle_timeout = get_idle_timeout(&matches)?;
     let connect_timeout = get_connect_timeout(&matches)?;
+    let connect_newest = matches.opt_present("connect-newest");
 
     // Save socket activation env vars for diagnostics (ListenFd::from_env() clears
     // them).
@@ -267,6 +275,7 @@ fn app_main(matches: Matches) -> Result<i32> {
                     systemd_activated,
                     idle_timeout,
                     connect_timeout,
+                    connect_newest,
                 )
             }
             Outcome::Child(Err(e)) => {
@@ -296,6 +305,7 @@ fn app_main(matches: Matches) -> Result<i32> {
             systemd_activated,
             idle_timeout,
             connect_timeout,
+            connect_newest,
         )
     }
 }

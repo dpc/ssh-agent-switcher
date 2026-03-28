@@ -27,59 +27,77 @@
 
 //! Utilities to find a target Unix socket matching glob patterns.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use log::{debug, info, trace};
 use tokio::net::UnixStream;
 
-/// Expands the given glob patterns and attempts to connect to the first
-/// matching Unix socket.
-///
-/// Returns the first successful connection, or `None` if no matching socket
-/// could be connected. If `timeout` is `Some`, each connection attempt is
-/// bounded by that duration.
-pub(super) async fn find_socket(
-    target_globs: &[String],
-    timeout: Option<Duration>,
-) -> Option<UnixStream> {
+/// Collects all paths matching the glob patterns, optionally sorting newest
+/// first by modification time.
+fn collect_paths(target_globs: &[String], newest_first: bool) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
     for pattern in target_globs {
-        let paths = match glob::glob(pattern) {
-            Ok(paths) => paths,
+        let entries = match glob::glob(pattern) {
+            Ok(entries) => entries,
             Err(e) => {
                 debug!("Invalid glob pattern '{}': {}", pattern, e);
                 continue;
             }
         };
 
-        for entry in paths {
-            let path = match entry {
-                Ok(path) => path,
-                Err(e) => {
-                    trace!("Error reading glob entry: {}", e);
+        for entry in entries {
+            match entry {
+                Ok(path) => paths.push(path),
+                Err(e) => trace!("Error reading glob entry: {}", e),
+            }
+        }
+    }
+
+    if newest_first {
+        paths.sort_by(|a, b| {
+            let mtime = |p: &PathBuf| p.metadata().and_then(|m| m.modified()).ok();
+            mtime(b).cmp(&mtime(a))
+        });
+    }
+
+    paths
+}
+
+/// Expands the given glob patterns and attempts to connect to the first
+/// matching Unix socket.
+///
+/// Returns the first successful connection, or `None` if no matching socket
+/// could be connected. If `timeout` is `Some`, each connection attempt is
+/// bounded by that duration. If `newest_first` is true, candidates are sorted
+/// by modification time (newest first).
+pub(super) async fn find_socket(
+    target_globs: &[String],
+    timeout: Option<Duration>,
+    newest_first: bool,
+) -> Option<UnixStream> {
+    let paths = collect_paths(target_globs, newest_first);
+
+    for path in paths {
+        let result = if let Some(timeout) = timeout {
+            match tokio::time::timeout(timeout, UnixStream::connect(&path)).await {
+                Ok(r) => r,
+                Err(_) => {
+                    debug!("Connection to {} timed out", path.display());
                     continue;
                 }
-            };
+            }
+        } else {
+            UnixStream::connect(&path).await
+        };
 
-            let result = if let Some(timeout) = timeout {
-                match tokio::time::timeout(timeout, UnixStream::connect(&path)).await {
-                    Ok(r) => r,
-                    Err(_) => {
-                        debug!("Connection to {} timed out", path.display());
-                        continue;
-                    }
-                }
-            } else {
-                UnixStream::connect(&path).await
-            };
-
-            match result {
-                Ok(stream) => {
-                    info!("Successfully connected to {}", path.display());
-                    return Some(stream);
-                }
-                Err(e) => {
-                    trace!("Cannot connect to {}: {}", path.display(), e);
-                }
+        match result {
+            Ok(stream) => {
+                info!("Successfully connected to {}", path.display());
+                return Some(stream);
+            }
+            Err(e) => {
+                trace!("Cannot connect to {}: {}", path.display(), e);
             }
         }
     }

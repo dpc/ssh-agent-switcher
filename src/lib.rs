@@ -123,8 +123,9 @@ async fn handle_connection(
     mut client: UnixStream,
     target_globs: &[String],
     connect_timeout: Option<Duration>,
+    connect_newest: bool,
 ) -> Result<()> {
-    let mut agent = match find::find_socket(target_globs, connect_timeout).await {
+    let mut agent = match find::find_socket(target_globs, connect_timeout, connect_newest).await {
         Some(socket) => socket,
         None => {
             return Err("No target socket found; cannot proxy request".to_owned());
@@ -154,6 +155,7 @@ pub async fn run(
     systemd_activated: bool,
     idle_timeout: Option<Duration>,
     connect_timeout: Option<Duration>,
+    connect_newest: bool,
 ) -> Result<()> {
     let socket_path = listener
         .local_addr()
@@ -204,7 +206,7 @@ pub async fn run(
                     let globs = Arc::clone(&target_globs);
                     tokio::spawn(async move {
                         let _guard = guard;
-                        if let Err(e) = handle_connection(socket, &globs, connect_timeout).await {
+                        if let Err(e) = handle_connection(socket, &globs, connect_timeout, connect_newest).await {
                             warn!("Dropping connection due to error: {}", e);
                         }
                     });
