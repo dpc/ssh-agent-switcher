@@ -85,15 +85,15 @@ fn get_idle_timeout(matches: &Matches) -> Result<Option<Duration>> {
     }
 }
 
-/// Gets the value of the `--timeout` flag, if specified.
-fn get_timeout(matches: &Matches) -> Result<Option<Duration>> {
-    match matches.opt_str("timeout") {
+/// Gets the value of the `--connect-timeout` flag, if specified.
+fn get_connect_timeout(matches: &Matches) -> Result<Option<Duration>> {
+    match matches.opt_str("connect-timeout") {
         Some(s) => {
             let ms: u64 = s
                 .parse()
-                .map_err(|_| anyhow!("--timeout must be a positive integer (milliseconds)"))?;
+                .map_err(|_| anyhow!("--connect-timeout must be a positive integer (milliseconds)"))?;
             if ms == 0 {
-                bail!("--timeout must be a positive integer (milliseconds)");
+                bail!("--connect-timeout must be a positive integer (milliseconds)");
             }
             Ok(Some(Duration::from_millis(ms)))
         }
@@ -135,7 +135,7 @@ fn app_setup(builder: Builder) -> Builder {
         )
         .optopt(
             "",
-            "timeout",
+            "connect-timeout",
             "timeout in milliseconds for each target socket connection attempt",
             "MS",
         )
@@ -191,7 +191,7 @@ fn app_main(matches: Matches) -> Result<i32> {
     let log_file = get_log_file(&matches);
     let pid_file = get_pid_file(&matches);
     let idle_timeout = get_idle_timeout(&matches)?;
-    let connect_timeout = get_timeout(&matches)?;
+    let connect_timeout = get_connect_timeout(&matches)?;
 
     // Save socket activation env vars for diagnostics (ListenFd::from_env() clears
     // them).
