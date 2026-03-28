@@ -119,8 +119,12 @@ pub fn create_listener(socket_path: &Path) -> Result<UnixListener> {
 }
 
 /// Handles one incoming connection on `client`.
-async fn handle_connection(mut client: UnixStream, target_globs: &[String]) -> Result<()> {
-    let mut agent = match find::find_socket(target_globs).await {
+async fn handle_connection(
+    mut client: UnixStream,
+    target_globs: &[String],
+    connect_timeout: Option<Duration>,
+) -> Result<()> {
+    let mut agent = match find::find_socket(target_globs, connect_timeout).await {
         Some(socket) => socket,
         None => {
             return Err("No target socket found; cannot proxy request".to_owned());
@@ -149,6 +153,7 @@ pub async fn run(
     pid_file: Option<PathBuf>,
     systemd_activated: bool,
     idle_timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
 ) -> Result<()> {
     let socket_path = listener
         .local_addr()
@@ -199,7 +204,7 @@ pub async fn run(
                     let globs = Arc::clone(&target_globs);
                     tokio::spawn(async move {
                         let _guard = guard;
-                        if let Err(e) = handle_connection(socket, &globs).await {
+                        if let Err(e) = handle_connection(socket, &globs, connect_timeout).await {
                             warn!("Dropping connection due to error: {}", e);
                         }
                     });

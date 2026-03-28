@@ -27,6 +27,8 @@
 
 //! Utilities to find a target Unix socket matching glob patterns.
 
+use std::time::Duration;
+
 use log::{debug, info, trace};
 use tokio::net::UnixStream;
 
@@ -34,8 +36,12 @@ use tokio::net::UnixStream;
 /// matching Unix socket.
 ///
 /// Returns the first successful connection, or `None` if no matching socket
-/// could be connected.
-pub(super) async fn find_socket(target_globs: &[String]) -> Option<UnixStream> {
+/// could be connected. If `timeout` is `Some`, each connection attempt is
+/// bounded by that duration.
+pub(super) async fn find_socket(
+    target_globs: &[String],
+    timeout: Option<Duration>,
+) -> Option<UnixStream> {
     for pattern in target_globs {
         let paths = match glob::glob(pattern) {
             Ok(paths) => paths,
@@ -54,7 +60,19 @@ pub(super) async fn find_socket(target_globs: &[String]) -> Option<UnixStream> {
                 }
             };
 
-            match UnixStream::connect(&path).await {
+            let result = if let Some(timeout) = timeout {
+                match tokio::time::timeout(timeout, UnixStream::connect(&path)).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        debug!("Connection to {} timed out", path.display());
+                        continue;
+                    }
+                }
+            } else {
+                UnixStream::connect(&path).await
+            };
+
+            match result {
                 Ok(stream) => {
                     info!("Successfully connected to {}", path.display());
                     return Some(stream);

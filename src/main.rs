@@ -85,6 +85,22 @@ fn get_idle_timeout(matches: &Matches) -> Result<Option<Duration>> {
     }
 }
 
+/// Gets the value of the `--timeout` flag, if specified.
+fn get_timeout(matches: &Matches) -> Result<Option<Duration>> {
+    match matches.opt_str("timeout") {
+        Some(s) => {
+            let ms: u64 = s
+                .parse()
+                .map_err(|_| anyhow!("--timeout must be a positive integer (milliseconds)"))?;
+            if ms == 0 {
+                bail!("--timeout must be a positive integer (milliseconds)");
+            }
+            Ok(Some(Duration::from_millis(ms)))
+        }
+        None => Ok(None),
+    }
+}
+
 fn app_setup(builder: Builder) -> Builder {
     builder
         .bugs("https://github.com/dpc/unix-socket-switcher/issues/")
@@ -117,6 +133,12 @@ fn app_setup(builder: Builder) -> Builder {
             "exit after being idle for this many seconds (useful with systemd activation)",
             "SECONDS",
         )
+        .optopt(
+            "",
+            "timeout",
+            "timeout in milliseconds for each target socket connection attempt",
+            "MS",
+        )
 }
 
 fn daemon_parent(log_file: Option<&Path>, pid_file: Option<&Path>) -> Result<i32> {
@@ -138,6 +160,7 @@ fn daemon_child(
     pid_file: Option<PathBuf>,
     systemd_activated: bool,
     idle_timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
 ) -> Result<i32> {
     // Block shutdown signals before creating the runtime so an early SIGTERM
     // doesn't kill the process.  They are unblocked inside run() after async
@@ -153,6 +176,7 @@ fn daemon_child(
             pid_file,
             systemd_activated,
             idle_timeout,
+            connect_timeout,
         )
         .await
         {
@@ -167,6 +191,7 @@ fn app_main(matches: Matches) -> Result<i32> {
     let log_file = get_log_file(&matches);
     let pid_file = get_pid_file(&matches);
     let idle_timeout = get_idle_timeout(&matches)?;
+    let connect_timeout = get_timeout(&matches)?;
 
     // Save socket activation env vars for diagnostics (ListenFd::from_env() clears
     // them).
@@ -241,6 +266,7 @@ fn app_main(matches: Matches) -> Result<i32> {
                     pid_file,
                     systemd_activated,
                     idle_timeout,
+                    connect_timeout,
                 )
             }
             Outcome::Child(Err(e)) => {
@@ -269,6 +295,7 @@ fn app_main(matches: Matches) -> Result<i32> {
             pid_file,
             systemd_activated,
             idle_timeout,
+            connect_timeout,
         )
     }
 }
