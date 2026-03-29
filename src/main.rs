@@ -151,11 +151,6 @@ fn app_setup(builder: Builder) -> Builder {
             "sort order for glob results: name (default), timestamp-oldest, timestamp-newest",
             "ORDER",
         )
-        .optflag(
-            "",
-            "connect-newest",
-            "alias for --target-glob-sort timestamp-newest",
-        )
 }
 
 fn daemon_parent(log_file: Option<&Path>, pid_file: Option<&Path>) -> Result<i32> {
@@ -209,13 +204,6 @@ fn daemon_child(
 
 fn get_glob_sort(matches: &Matches) -> Result<unix_socket_switcher::GlobSort> {
     use unix_socket_switcher::GlobSort;
-
-    if matches.opt_present("connect-newest") {
-        if matches.opt_str("target-glob-sort").is_some() {
-            bail!("Cannot use --connect-newest together with --target-glob-sort");
-        }
-        return Ok(GlobSort::TimestampNewest);
-    }
 
     match matches.opt_str("target-glob-sort").as_deref() {
         None | Some("name") => Ok(GlobSort::Name),

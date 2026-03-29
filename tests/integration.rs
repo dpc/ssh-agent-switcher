@@ -734,47 +734,6 @@ fn test_target_glob_sort_timestamp_oldest() {
 }
 
 #[test]
-fn test_connect_newest_alias() {
-    // --connect-newest should behave like --target-glob-sort timestamp-newest
-    let temp_dir = TempDir::new().unwrap();
-    let backends_dir = temp_dir.path().join("backends");
-    std::fs::create_dir(&backends_dir).unwrap();
-
-    let aaa_socket = backends_dir.join("aaa.sock");
-    let zzz_socket = backends_dir.join("zzz.sock");
-    let switcher_socket = temp_dir.path().join("switcher.sock");
-
-    let _aaa = spawn_backend(&aaa_socket, BackendType::AlwaysA);
-    thread::sleep(Duration::from_millis(50));
-    let _zzz = spawn_backend(&zzz_socket, BackendType::Echo);
-
-    let glob = format!("{}/*.sock", backends_dir.display());
-    let mut child = start_switcher_custom(
-        &switcher_socket,
-        &["--target-glob", &glob, "--connect-newest"],
-    );
-
-    assert!(wait_for_path(&switcher_socket, Duration::from_secs(5)));
-
-    let mut stream = UnixStream::connect(&switcher_socket).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    stream.write_all(b"hi").unwrap();
-    let mut buf = [0u8; 2];
-    stream.read_exact(&mut buf).unwrap();
-    assert_eq!(
-        &buf, b"hi",
-        "--connect-newest should pick zzz.sock (Echo, newer)"
-    );
-
-    unsafe {
-        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
-    }
-    child.wait().unwrap();
-}
-
-#[test]
 fn test_fallback_glob_used_when_primary_fails() {
     // Primary glob dir has no working backends; fallback should be used.
     let temp_dir = TempDir::new().unwrap();
