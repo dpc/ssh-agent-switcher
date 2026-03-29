@@ -113,6 +113,12 @@ fn app_setup(builder: Builder) -> Builder {
             "glob pattern for target Unix socket(s) to connect to (can be repeated)",
             "GLOB",
         )
+        .optmulti(
+            "",
+            "target-fallback-glob",
+            "fallback glob pattern, tried after all --target-glob entries fail (can be repeated)",
+            "GLOB",
+        )
         .optflag("", "daemon", "run in the background")
         .optopt(
             "",
@@ -139,10 +145,16 @@ fn app_setup(builder: Builder) -> Builder {
             "timeout in milliseconds for each target socket connection attempt",
             "MS",
         )
+        .optopt(
+            "",
+            "target-glob-sort",
+            "sort order for glob results: name (default), timestamp-oldest, timestamp-newest",
+            "ORDER",
+        )
         .optflag(
             "",
             "connect-newest",
-            "try target sockets newest first (by filesystem modification time)",
+            "alias for --target-glob-sort timestamp-newest",
         )
 }
 
@@ -162,11 +174,12 @@ fn daemon_parent(log_file: Option<&Path>, pid_file: Option<&Path>) -> Result<i32
 fn daemon_child(
     listener: UnixListener,
     target_globs: &[String],
+    fallback_globs: &[String],
     pid_file: Option<PathBuf>,
     systemd_activated: bool,
     idle_timeout: Option<Duration>,
     connect_timeout: Option<Duration>,
-    connect_newest: bool,
+    glob_sort: unix_socket_switcher::GlobSort,
 ) -> Result<i32> {
     // Block shutdown signals before creating the runtime so an early SIGTERM
     // doesn't kill the process.  They are unblocked inside run() after async
@@ -179,11 +192,12 @@ fn daemon_child(
         if let Err(e) = unix_socket_switcher::run(
             listener,
             target_globs,
+            fallback_globs,
             pid_file,
             systemd_activated,
             idle_timeout,
             connect_timeout,
-            connect_newest,
+            glob_sort,
         )
         .await
         {
@@ -193,13 +207,35 @@ fn daemon_child(
     })
 }
 
+fn get_glob_sort(matches: &Matches) -> Result<unix_socket_switcher::GlobSort> {
+    use unix_socket_switcher::GlobSort;
+
+    if matches.opt_present("connect-newest") {
+        if matches.opt_str("target-glob-sort").is_some() {
+            bail!("Cannot use --connect-newest together with --target-glob-sort");
+        }
+        return Ok(GlobSort::TimestampNewest);
+    }
+
+    match matches.opt_str("target-glob-sort").as_deref() {
+        None | Some("name") => Ok(GlobSort::Name),
+        Some("timestamp-oldest") => Ok(GlobSort::TimestampOldest),
+        Some("timestamp-newest") => Ok(GlobSort::TimestampNewest),
+        Some(other) => bail!(
+            "Invalid --target-glob-sort value '{}'; expected name, timestamp-oldest, or timestamp-newest",
+            other
+        ),
+    }
+}
+
 fn app_main(matches: Matches) -> Result<i32> {
     let target_globs = get_target_globs(&matches)?;
+    let fallback_globs = matches.opt_strs("target-fallback-glob");
     let log_file = get_log_file(&matches);
     let pid_file = get_pid_file(&matches);
     let idle_timeout = get_idle_timeout(&matches)?;
     let connect_timeout = get_connect_timeout(&matches)?;
-    let connect_newest = matches.opt_present("connect-newest");
+    let glob_sort = get_glob_sort(&matches)?;
 
     // Save socket activation env vars for diagnostics (ListenFd::from_env() clears
     // them).
@@ -271,11 +307,12 @@ fn app_main(matches: Matches) -> Result<i32> {
                 daemon_child(
                     listener,
                     &target_globs,
+                    &fallback_globs,
                     pid_file,
                     systemd_activated,
                     idle_timeout,
                     connect_timeout,
-                    connect_newest,
+                    glob_sort,
                 )
             }
             Outcome::Child(Err(e)) => {
@@ -301,11 +338,12 @@ fn app_main(matches: Matches) -> Result<i32> {
         daemon_child(
             listener,
             &target_globs,
+            &fallback_globs,
             pid_file,
             systemd_activated,
             idle_timeout,
             connect_timeout,
-            connect_newest,
+            glob_sort,
         )
     }
 }

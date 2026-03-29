@@ -331,8 +331,7 @@ fn run_switcher_test(daemon: bool) {
         "Echo socket should appear"
     );
 
-    // The switcher searches glob matches in order; always-a.sock sorts before
-    // echo.sock
+    // Default sort is by name; always-a.sock sorts before echo.sock
     let test_data = b"Test";
     let response = env.exchange(test_data).expect("Failed to exchange");
     // Should get 'a's since always-a.sock is sorted before echo.sock
@@ -582,6 +581,289 @@ fn test_communication_patterns() {
         libc::kill(child.id() as libc::pid_t, libc::SIGINT);
     }
     child.wait().expect("Failed to wait for child");
+}
+
+/// Start the switcher with custom arguments appended after the base ones.
+fn start_switcher_custom(switcher_socket: &Path, extra_args: &[&str]) -> Child {
+    let mut cmd = Command::new(binary_path());
+    cmd.arg("--socket-path").arg(switcher_socket);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    cmd.spawn().expect("Failed to start unix-socket-switcher")
+}
+
+#[test]
+fn test_target_glob_sort_name() {
+    // With sort=name (default), alphabetically first socket wins.
+    // "aaa.sock" < "zzz.sock", so aaa (AlwaysA) should be picked.
+    let temp_dir = TempDir::new().unwrap();
+    let backends_dir = temp_dir.path().join("backends");
+    std::fs::create_dir(&backends_dir).unwrap();
+
+    let aaa_socket = backends_dir.join("aaa.sock");
+    let zzz_socket = backends_dir.join("zzz.sock");
+    let switcher_socket = temp_dir.path().join("switcher.sock");
+
+    // Start zzz first (echo), then aaa (always-a) — creation order shouldn't matter
+    // for name sort
+    let _zzz = spawn_backend(&zzz_socket, BackendType::Echo);
+    let _aaa = spawn_backend(&aaa_socket, BackendType::AlwaysA);
+
+    let glob = format!("{}/*.sock", backends_dir.display());
+    let mut child = start_switcher_custom(
+        &switcher_socket,
+        &["--target-glob", &glob, "--target-glob-sort", "name"],
+    );
+
+    assert!(wait_for_path(&switcher_socket, Duration::from_secs(5)));
+
+    // aaa.sock (AlwaysA) sorts first alphabetically
+    let mut stream = UnixStream::connect(&switcher_socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream.write_all(b"hi").unwrap();
+    let mut buf = [0u8; 2];
+    stream.read_exact(&mut buf).unwrap();
+    assert_eq!(
+        &buf, b"aa",
+        "name sort should pick aaa.sock (AlwaysA) first"
+    );
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    child.wait().unwrap();
+}
+
+#[test]
+fn test_target_glob_sort_timestamp_newest() {
+    // Create two backends with different mtimes. The newer one should be tried
+    // first.
+    let temp_dir = TempDir::new().unwrap();
+    let backends_dir = temp_dir.path().join("backends");
+    std::fs::create_dir(&backends_dir).unwrap();
+
+    // "aaa" is created first (older mtime), "zzz" second (newer mtime).
+    // With timestamp-newest, zzz (Echo) should be picked despite aaa sorting first
+    // by name.
+    let aaa_socket = backends_dir.join("aaa.sock");
+    let zzz_socket = backends_dir.join("zzz.sock");
+    let switcher_socket = temp_dir.path().join("switcher.sock");
+
+    let _aaa = spawn_backend(&aaa_socket, BackendType::AlwaysA);
+    thread::sleep(Duration::from_millis(50));
+    let _zzz = spawn_backend(&zzz_socket, BackendType::Echo);
+
+    let glob = format!("{}/*.sock", backends_dir.display());
+    let mut child = start_switcher_custom(
+        &switcher_socket,
+        &[
+            "--target-glob",
+            &glob,
+            "--target-glob-sort",
+            "timestamp-newest",
+        ],
+    );
+
+    assert!(wait_for_path(&switcher_socket, Duration::from_secs(5)));
+
+    let mut stream = UnixStream::connect(&switcher_socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream.write_all(b"hi").unwrap();
+    let mut buf = [0u8; 2];
+    stream.read_exact(&mut buf).unwrap();
+    assert_eq!(
+        &buf, b"hi",
+        "timestamp-newest should pick zzz.sock (Echo, newer)"
+    );
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    child.wait().unwrap();
+}
+
+#[test]
+fn test_target_glob_sort_timestamp_oldest() {
+    // Same setup, but timestamp-oldest should pick aaa (the older one).
+    let temp_dir = TempDir::new().unwrap();
+    let backends_dir = temp_dir.path().join("backends");
+    std::fs::create_dir(&backends_dir).unwrap();
+
+    let aaa_socket = backends_dir.join("aaa.sock");
+    let zzz_socket = backends_dir.join("zzz.sock");
+    let switcher_socket = temp_dir.path().join("switcher.sock");
+
+    let _aaa = spawn_backend(&aaa_socket, BackendType::AlwaysA);
+    thread::sleep(Duration::from_millis(50));
+    let _zzz = spawn_backend(&zzz_socket, BackendType::Echo);
+
+    let glob = format!("{}/*.sock", backends_dir.display());
+    let mut child = start_switcher_custom(
+        &switcher_socket,
+        &[
+            "--target-glob",
+            &glob,
+            "--target-glob-sort",
+            "timestamp-oldest",
+        ],
+    );
+
+    assert!(wait_for_path(&switcher_socket, Duration::from_secs(5)));
+
+    let mut stream = UnixStream::connect(&switcher_socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream.write_all(b"hi").unwrap();
+    let mut buf = [0u8; 2];
+    stream.read_exact(&mut buf).unwrap();
+    assert_eq!(
+        &buf, b"aa",
+        "timestamp-oldest should pick aaa.sock (AlwaysA, older)"
+    );
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    child.wait().unwrap();
+}
+
+#[test]
+fn test_connect_newest_alias() {
+    // --connect-newest should behave like --target-glob-sort timestamp-newest
+    let temp_dir = TempDir::new().unwrap();
+    let backends_dir = temp_dir.path().join("backends");
+    std::fs::create_dir(&backends_dir).unwrap();
+
+    let aaa_socket = backends_dir.join("aaa.sock");
+    let zzz_socket = backends_dir.join("zzz.sock");
+    let switcher_socket = temp_dir.path().join("switcher.sock");
+
+    let _aaa = spawn_backend(&aaa_socket, BackendType::AlwaysA);
+    thread::sleep(Duration::from_millis(50));
+    let _zzz = spawn_backend(&zzz_socket, BackendType::Echo);
+
+    let glob = format!("{}/*.sock", backends_dir.display());
+    let mut child = start_switcher_custom(
+        &switcher_socket,
+        &["--target-glob", &glob, "--connect-newest"],
+    );
+
+    assert!(wait_for_path(&switcher_socket, Duration::from_secs(5)));
+
+    let mut stream = UnixStream::connect(&switcher_socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream.write_all(b"hi").unwrap();
+    let mut buf = [0u8; 2];
+    stream.read_exact(&mut buf).unwrap();
+    assert_eq!(
+        &buf, b"hi",
+        "--connect-newest should pick zzz.sock (Echo, newer)"
+    );
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    child.wait().unwrap();
+}
+
+#[test]
+fn test_fallback_glob_used_when_primary_fails() {
+    // Primary glob dir has no working backends; fallback should be used.
+    let temp_dir = TempDir::new().unwrap();
+    let primary_dir = temp_dir.path().join("primary");
+    let fallback_dir = temp_dir.path().join("fallback");
+    std::fs::create_dir(&primary_dir).unwrap();
+    std::fs::create_dir(&fallback_dir).unwrap();
+
+    let fallback_socket = fallback_dir.join("backend.sock");
+    let switcher_socket = temp_dir.path().join("switcher.sock");
+
+    // Only start a backend in the fallback dir
+    let _fb = spawn_backend(&fallback_socket, BackendType::Echo);
+
+    let primary_glob = format!("{}/*.sock", primary_dir.display());
+    let fallback_glob = format!("{}/*.sock", fallback_dir.display());
+    let mut child = start_switcher_custom(
+        &switcher_socket,
+        &[
+            "--target-glob",
+            &primary_glob,
+            "--target-fallback-glob",
+            &fallback_glob,
+        ],
+    );
+
+    assert!(wait_for_path(&switcher_socket, Duration::from_secs(5)));
+
+    let mut stream = UnixStream::connect(&switcher_socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream.write_all(b"hello").unwrap();
+    let mut buf = [0u8; 5];
+    stream.read_exact(&mut buf).unwrap();
+    assert_eq!(&buf, b"hello", "fallback backend should be used");
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    child.wait().unwrap();
+}
+
+#[test]
+fn test_fallback_glob_not_used_when_primary_works() {
+    // Both dirs have backends; primary should be preferred.
+    let temp_dir = TempDir::new().unwrap();
+    let primary_dir = temp_dir.path().join("primary");
+    let fallback_dir = temp_dir.path().join("fallback");
+    std::fs::create_dir(&primary_dir).unwrap();
+    std::fs::create_dir(&fallback_dir).unwrap();
+
+    let primary_socket = primary_dir.join("backend.sock");
+    let fallback_socket = fallback_dir.join("backend.sock");
+    let switcher_socket = temp_dir.path().join("switcher.sock");
+
+    let _primary = spawn_backend(&primary_socket, BackendType::AlwaysA);
+    let _fallback = spawn_backend(&fallback_socket, BackendType::Echo);
+
+    let primary_glob = format!("{}/*.sock", primary_dir.display());
+    let fallback_glob = format!("{}/*.sock", fallback_dir.display());
+    let mut child = start_switcher_custom(
+        &switcher_socket,
+        &[
+            "--target-glob",
+            &primary_glob,
+            "--target-fallback-glob",
+            &fallback_glob,
+        ],
+    );
+
+    assert!(wait_for_path(&switcher_socket, Duration::from_secs(5)));
+
+    let mut stream = UnixStream::connect(&switcher_socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream.write_all(b"hi").unwrap();
+    let mut buf = [0u8; 2];
+    stream.read_exact(&mut buf).unwrap();
+    assert_eq!(
+        &buf, b"aa",
+        "primary (AlwaysA) should be used, not fallback (Echo)"
+    );
+
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    child.wait().unwrap();
 }
 
 /// Helper: start switcher with --idle-timeout and return the child process.

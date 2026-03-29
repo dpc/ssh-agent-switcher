@@ -33,11 +33,21 @@ use std::time::Duration;
 use log::{debug, info, trace};
 use tokio::net::UnixStream;
 
-/// Collects all paths matching the glob patterns, optionally sorting newest
-/// first by modification time.
-fn collect_paths(target_globs: &[String], newest_first: bool) -> Vec<PathBuf> {
+/// How to sort glob results before attempting connections.
+#[derive(Clone, Copy, Debug)]
+pub enum GlobSort {
+    /// Sort alphabetically by path name.
+    Name,
+    /// Sort by filesystem modification time, oldest first.
+    TimestampOldest,
+    /// Sort by filesystem modification time, newest first.
+    TimestampNewest,
+}
+
+/// Collects all paths matching the glob patterns, sorted according to `sort`.
+fn collect_paths(globs: &[String], sort: GlobSort) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    for pattern in target_globs {
+    for pattern in globs {
         let entries = match glob::glob(pattern) {
             Ok(entries) => entries,
             Err(e) => {
@@ -54,30 +64,27 @@ fn collect_paths(target_globs: &[String], newest_first: bool) -> Vec<PathBuf> {
         }
     }
 
-    if newest_first {
-        paths.sort_by(|a, b| {
-            let mtime = |p: &PathBuf| p.metadata().and_then(|m| m.modified()).ok();
-            mtime(b).cmp(&mtime(a))
-        });
+    match sort {
+        GlobSort::Name => paths.sort(),
+        GlobSort::TimestampOldest => {
+            paths.sort_by(|a, b| {
+                let mtime = |p: &PathBuf| p.metadata().and_then(|m| m.modified()).ok();
+                mtime(a).cmp(&mtime(b))
+            });
+        }
+        GlobSort::TimestampNewest => {
+            paths.sort_by(|a, b| {
+                let mtime = |p: &PathBuf| p.metadata().and_then(|m| m.modified()).ok();
+                mtime(b).cmp(&mtime(a))
+            });
+        }
     }
 
     paths
 }
 
-/// Expands the given glob patterns and attempts to connect to the first
-/// matching Unix socket.
-///
-/// Returns the first successful connection, or `None` if no matching socket
-/// could be connected. If `timeout` is `Some`, each connection attempt is
-/// bounded by that duration. If `newest_first` is true, candidates are sorted
-/// by modification time (newest first).
-pub(super) async fn find_socket(
-    target_globs: &[String],
-    timeout: Option<Duration>,
-    newest_first: bool,
-) -> Option<UnixStream> {
-    let paths = collect_paths(target_globs, newest_first);
-
+/// Attempts to connect to the first reachable socket from `paths`.
+async fn try_connect(paths: &[PathBuf], timeout: Option<Duration>) -> Option<UnixStream> {
     for path in paths {
         let result = if let Some(timeout) = timeout {
             match tokio::time::timeout(timeout, UnixStream::connect(&path)).await {
@@ -99,6 +106,33 @@ pub(super) async fn find_socket(
             Err(e) => {
                 trace!("Cannot connect to {}: {}", path.display(), e);
             }
+        }
+    }
+
+    None
+}
+
+/// Expands the given glob patterns and attempts to connect to the first
+/// matching Unix socket.
+///
+/// Primary `target_globs` are tried first. If none succeeds, `fallback_globs`
+/// are tried. Both sets are sorted according to `sort`. If `timeout` is `Some`,
+/// each connection attempt is bounded by that duration.
+pub(super) async fn find_socket(
+    target_globs: &[String],
+    fallback_globs: &[String],
+    timeout: Option<Duration>,
+    sort: GlobSort,
+) -> Option<UnixStream> {
+    let paths = collect_paths(target_globs, sort);
+    if let Some(stream) = try_connect(&paths, timeout).await {
+        return Some(stream);
+    }
+
+    if !fallback_globs.is_empty() {
+        let fallback_paths = collect_paths(fallback_globs, sort);
+        if let Some(stream) = try_connect(&fallback_paths, timeout).await {
+            return Some(stream);
         }
     }
 

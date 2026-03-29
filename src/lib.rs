@@ -68,6 +68,8 @@ impl Drop for ConnectionGuard {
 
 mod find;
 
+pub use find::GlobSort;
+
 /// Result type for this crate.
 type Result<T> = std::result::Result<T, String>;
 
@@ -122,15 +124,17 @@ pub fn create_listener(socket_path: &Path) -> Result<UnixListener> {
 async fn handle_connection(
     mut client: UnixStream,
     target_globs: &[String],
+    fallback_globs: &[String],
     connect_timeout: Option<Duration>,
-    connect_newest: bool,
+    glob_sort: GlobSort,
 ) -> Result<()> {
-    let mut agent = match find::find_socket(target_globs, connect_timeout, connect_newest).await {
-        Some(socket) => socket,
-        None => {
-            return Err("No target socket found; cannot proxy request".to_owned());
-        }
-    };
+    let mut agent =
+        match find::find_socket(target_globs, fallback_globs, connect_timeout, glob_sort).await {
+            Some(socket) => socket,
+            None => {
+                return Err("No target socket found; cannot proxy request".to_owned());
+            }
+        };
     let result = tokio::io::copy_bidirectional(&mut client, &mut agent)
         .await
         .map(|_| ())
@@ -151,11 +155,12 @@ async fn handle_connection(
 pub async fn run(
     listener: UnixListener,
     target_globs: &[String],
+    fallback_globs: &[String],
     pid_file: Option<PathBuf>,
     systemd_activated: bool,
     idle_timeout: Option<Duration>,
     connect_timeout: Option<Duration>,
-    connect_newest: bool,
+    glob_sort: GlobSort,
 ) -> Result<()> {
     let socket_path = listener
         .local_addr()
@@ -190,6 +195,7 @@ pub async fn run(
     }
 
     let target_globs: Arc<[String]> = target_globs.into();
+    let fallback_globs: Arc<[String]> = fallback_globs.into();
     let active_connections = ActiveConnections::new();
 
     let idle_sleep = tokio::time::sleep(idle_timeout.unwrap_or(Duration::MAX));
@@ -204,9 +210,10 @@ pub async fn run(
                     debug!("Connection accepted");
                     let guard = active_connections.guard();
                     let globs = Arc::clone(&target_globs);
+                    let fb_globs = Arc::clone(&fallback_globs);
                     tokio::spawn(async move {
                         let _guard = guard;
-                        if let Err(e) = handle_connection(socket, &globs, connect_timeout, connect_newest).await {
+                        if let Err(e) = handle_connection(socket, &globs, &fb_globs, connect_timeout, glob_sort).await {
                             warn!("Dropping connection due to error: {}", e);
                         }
                     });
