@@ -50,6 +50,9 @@ make install MODE=release PREFIX="${HOME}/.local"
 
 ## Usage
 
+For a short real-world SSH/GPG forwarding setup, see
+[README.dpc-setup.md](README.dpc-setup.md).
+
 ### SSH agent forwarding example
 
 Extend your login script (typically `~/.login`, `~/.bash_login`, or `~/.zlogin`)
