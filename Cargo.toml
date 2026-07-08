@@ -12,15 +12,14 @@ readme = "README.md"
 edition = "2024"
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 daemonize = "0.5"
+env_logger = "0.11"
 glob = "0.3"
 libc = "0.2"
 listenfd = "1"
 log = "0.4"
-
-[dependencies.getoptsargs]
-version = "0.1"
-features = ["env_logger"]
 
 [dependencies.tokio]
 version = "1"
